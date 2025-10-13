@@ -31,11 +31,11 @@
 
 | 起始地址 | 结束地址 | 大小 | 用途 |
 | :---: | :---: | :---: | :--- |
-| `0x0000_0000` | `0x3FFF_FFFF` | `-` | Reserved |
+| `0x0000_0000` | `0x1FFF_FFFF` | `512 MB` | `DDR3` 地址范围,  `ADC` 采样数据从该地址处读取 |
 | `0x4000_0000` | `0x4000_FFFF` | `64 k` | `DMA` 模块控制器地址范围 |
 | `0x4001_0000` | `0x4001_FFFF` | `64 k` | `ADC` 模块控制器地址范围 |
-| `0x4002_0000` | `0x7FFF_FFFF` | `-` | Reserved |
-| `0x8000_0000` | `0x9FFF_FFFF` | `512 M` | `DDR3` 地址范围,  `ADC` 采样数据从该地址处读取 |
+| `0x4002_0000` | `0x6000_0000` | `-` | Reserved |
+| `0x8000_0000` | `0x6000_1FFF` | `8 k` | `BRAM` 地址范围, 当 `DDR3` 出现故障时作为缓存 |
   
 <img src="../images/FPGA-Address.png" alt="地址分配" style="width:500px; height:auto;" />  
 
@@ -208,5 +208,7 @@ $$ C_{sampling} \leq 512 MB $$
     ... ...
 
     /dev/xdma_events_15
+
+使用 `FPGA-Tool` 提供的接口可以简单的读取这些设备文件, 即访问寄存器和 `DDR`. [`FPGA-Tool` 使用手册](https://github.com/ShixuanLiu9527/vuprs-server/blob/main/ug-fpga-tool.md)  
 
 _Shixuan Liu 2025_
