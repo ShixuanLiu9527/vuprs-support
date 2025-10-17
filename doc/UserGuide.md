@@ -2,8 +2,6 @@
 
 本文档是高速数据采集板编程指南, 记录了所有编程调试步骤.  
 
-[][]
-
 ## 1. `FPGA` 侧系统设计与使用
 
 `FPGA` 使用 `PCIe` 接口和 `RK3568` 通信.  
@@ -60,6 +58,7 @@
 | `0x0C` | `STR` | `R/W` | Sampling Trigger & Ready |
 | `0x10` | `NGF` | `R` | Number of Generated Frames |
 | `0x14` | `ERR` | `R` | Error Flags of ADC |
+| `0x18` | `ERR` | `R` | Reset of ADC |
   
 **寄存器详细信息**  
   
@@ -127,6 +126,10 @@ $$ C_{sampling} \leq 512 MB $$
 | `0100` | Sampling Timeout | 采样流程整体超时 |
 | `0101` | Unable to Start Sampling | 无法开启采样, `ADC` 芯片的 `Busy` 引脚没有自动拉高 |
 | `0110` | Sampling Too Fast | 采样频率设置过高, 无法满足定时采集 |
+  
+**`ERR (Error Flags of ADC, offset = 18h)`**  
+
+对该寄存器的写操作会触发复位.  
 
 #### 1.3.3 `ADC` 采集流程
 
