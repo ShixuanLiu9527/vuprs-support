@@ -103,7 +103,26 @@
 		output wire [(C_M00_AXIS_TDATA_WIDTH/8)-1 : 0] m00_axis_tstrb,
 		output wire [(C_M00_AXIS_TDATA_WIDTH/8)-1 : 0] m00_axis_tkeep,
 		output wire  m00_axis_tlast,
-		input wire  m00_axis_tready
+		input wire  m00_axis_tready,
+		
+		// DEBUG_PORTS
+
+		/* S_AXI */
+		
+		output wire [2: 0] DEBUG_frame_state,
+
+		/* M_AXIS */
+
+		output wire [1: 0] DEBUG_mst_exec_state,
+		output wire [7: 0] DEBUG_buffer_pointer,
+		output wire [32: 0] DEBUG_data_send_count,
+		output wire DEBUG_fifo_rd_en,
+
+		output wire [2: 0] DEBUG_fifo_write_state,
+		output wire [7: 0] DEBUG_crc_calculated_channels,
+		output wire [7: 0] DEBUG_fifo_pushed_number,
+		output wire DEBUG_fifo_write_en,
+		output wire [31: 0] DEBUG_current_fifo_write_data
 	);
 
 	wire ready;
@@ -112,6 +131,7 @@
 	wire [C_S00_AXI_DATA_WIDTH - 1: 0] sampling_points;
 	wire one_frame_sampling_trigger;
 	wire last_frame;
+	wire software_rst;
 
 // Instantiation of Axi Bus Interface S00_AXI
 	vuprs_adc_controller_v2_0_S00_AXI # (
@@ -129,6 +149,7 @@
 		.sampling_points(sampling_points),
 		.one_frame_sampling_trigger(one_frame_sampling_trigger),
 		.last_frame(last_frame),
+		.software_rst(software_rst),
 
 		.adc_card_present_detect(adc_card_present_detect),
 		.fpga_sampling_led(fpga_sampling_led),
@@ -156,7 +177,11 @@
 		.S_AXI_RDATA(s00_axi_rdata),
 		.S_AXI_RRESP(s00_axi_rresp),
 		.S_AXI_RVALID(s00_axi_rvalid),
-		.S_AXI_RREADY(s00_axi_rready)
+		.S_AXI_RREADY(s00_axi_rready),
+		
+		/* DEBUG */
+		
+		.DEBUG_frame_state(DEBUG_frame_state)
 	);
 
 // Instantiation of Axi Bus Interface M00_AXIS
@@ -191,6 +216,7 @@
 		.one_frame_sampling_trigger(one_frame_sampling_trigger),
 		.ready(ready),
 		.last_frame(last_frame),
+		.software_rst(software_rst),
 
 		/* ADC Hardware Pins */
 
@@ -230,7 +256,20 @@
 		.M_AXIS_TDATA(m00_axis_tdata),
 		.M_AXIS_TSTRB(m00_axis_tstrb),
 		.M_AXIS_TLAST(m00_axis_tlast),
-		.M_AXIS_TREADY(m00_axis_tready)
+		.M_AXIS_TREADY(m00_axis_tready),
+		
+		/* DEBUG */
+		
+		.DEBUG_mst_exec_state(DEBUG_mst_exec_state),
+		.DEBUG_buffer_pointer(DEBUG_buffer_pointer),
+		.DEBUG_data_send_count(DEBUG_data_send_count),
+		.DEBUG_fifo_rd_en(DEBUG_fifo_rd_en),
+
+		.DEBUG_fifo_write_state(DEBUG_fifo_write_state),
+		.DEBUG_crc_calculated_channels(DEBUG_crc_calculated_channels),
+		.DEBUG_fifo_pushed_number(DEBUG_fifo_pushed_number),
+		.DEBUG_fifo_write_en(DEBUG_fifo_write_en),
+		.DEBUG_current_fifo_write_data(DEBUG_current_fifo_write_data)
 	);
 
 	// Add user logic here

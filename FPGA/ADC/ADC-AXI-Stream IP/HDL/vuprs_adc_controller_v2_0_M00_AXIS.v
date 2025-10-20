@@ -37,6 +37,7 @@ module vuprs_adc_controller_v2_0_M00_AXIS #
 	input wire [CONTROL_REGISTER_WIDTH - 1: 0]   sampling_clk_increment,
 	input wire [CONTROL_REGISTER_WIDTH - 1: 0]   sampling_points,
 	input wire                                   last_frame,
+	input wire                                   software_rst,
 
 	input wire                                   one_frame_sampling_trigger, /* rising edge to trigger */
 	input wire                                   adc_clk,                    /* clock for ADC, 100 MHz or 50 MHz */
@@ -107,7 +108,20 @@ module vuprs_adc_controller_v2_0_M00_AXIS #
 
 	/* TREADY indicates that the slave can accept a transfer in the current cycle. */
 
-	input wire                                      M_AXIS_TREADY
+	input wire                                      M_AXIS_TREADY,
+	
+	/* --------------------------- debug ------------------------------ */
+	
+	output wire [1: 0] DEBUG_mst_exec_state,
+	output wire [7: 0] DEBUG_buffer_pointer,
+	output wire [32: 0] DEBUG_data_send_count,
+	output wire DEBUG_fifo_rd_en,
+
+	output wire [2: 0] DEBUG_fifo_write_state,
+	output wire [7: 0] DEBUG_crc_calculated_channels,
+	output wire [7: 0] DEBUG_fifo_pushed_number,
+	output wire DEBUG_fifo_write_en,
+	output wire [31: 0] DEBUG_current_fifo_write_data
 );
 	
 	// function called clogb2 that returns an integer which has the
@@ -120,8 +134,7 @@ module vuprs_adc_controller_v2_0_M00_AXIS #
 	endfunction
 	                                                                                     
 	// WAIT_COUNT_BITS is the width of the wait counter.                                 
-	localparam integer WAIT_COUNT_BITS = clogb2(C_M_START_COUNT);
-	localparam integer BUFFER_POINTER_BITS = clogb2(C_M_AXIS_BUFFER_SIZE) + 1;
+	localparam integer BUFFER_POINTER_BITS = clogb2(C_M_AXIS_BUFFER_SIZE) + 3;
 	                                                                                     
 	// BIT_NUM gives the minimum number of bits needed to address 'depth' size of FIFO.  
 	localparam BIT_NUM  = CONTROL_REGISTER_WIDTH + 1; 
@@ -130,7 +143,11 @@ module vuprs_adc_controller_v2_0_M00_AXIS #
 	localparam FIFO_RESET_CLOCK_COUNT_2 = 65;
 	localparam FIFO_RESET_WAIT_MAX_COUNT = 150;
 
+	localparam ADC_DEFAULT_CLOCK_INCREMENT = 12500;
+
 	localparam BUFFER_RESET_CLOCK_COUNT = 3;
+
+	localparam integer WAIT_COUNT_BITS = clogb2(FIFO_RESET_WAIT_MAX_COUNT) + 3;
 	                                                                                  
 	/*  
 		Define the states of state machine
@@ -162,31 +179,49 @@ module vuprs_adc_controller_v2_0_M00_AXIS #
 	localparam TRUE                               = 1'b1,
 			   FALSE                              = 1'b0;
 
-	localparam INVALID_BUFFER_POINTER             = C_M_AXIS_BUFFER_SIZE + 1;
+	localparam INVALID_BUFFER_POINTER             = C_M_AXIS_BUFFER_SIZE;  // 32
 
 	localparam FRAME_HEADER                       = 32'h0000_FFF0,
-			   FRAME_TAILER                       = 32'h0000_FF0F;
+			   FRAME_TAILER                       = 32'h0000_FF0F,
+			   INVALID_BUFFER_DATA                = 32'hF0F0_F0F0;
 
 	localparam FRAME_WORD_NUMBER                  = 18;
 
+	localparam MINIUM_SAMPLING_CLK_INCREMENT      = (1000_000_000 / 150_000) / USR_CLK_CYCLE_NS + 1;  // 150 kHz max
+
 	reg [1: 0] mst_exec_state;  // State variable
+	assign DEBUG_mst_exec_state = mst_exec_state;
+
+	reg [1: 0] mst_exec_state_sync00;  // ADC clock domain
+	reg [1: 0] mst_exec_state_sync01;  // ADC clock domain
+	reg [1: 0] mst_exec_state_sync;  // ADC clock domain
 	
 	reg [BIT_NUM - 1: 0] data_send_count;  // indicate the quantity of sended data, BIT_NUM
+	assign DEBUG_data_send_count = data_send_count;
 
 	// AXI Stream internal signals
 
 	reg [WAIT_COUNT_BITS - 1: 0] init_count;  // wait counter. The master waits for the user defined number of clock cycles before initiating a transfer.
 	reg [WAIT_COUNT_BITS - 1: 0] fifo_reset_count;
+
+	reg [WAIT_COUNT_BITS - 1: 0] fifo_reset_count2;
+
+	reg [WAIT_COUNT_BITS - 1: 0] fifo_reset_count2_sync_00;  // AXI clock domain
+	reg [WAIT_COUNT_BITS - 1: 0] fifo_reset_count2_sync_01;  // AXI clock domain
+	reg [WAIT_COUNT_BITS - 1: 0] fifo_reset_count2_sync;  // AXI clock domain
 	
-	reg  							    axis_tvalid;  // streaming data valid
+	// reg  							    axis_tvalid;  // streaming data valid
 	reg  	                            axis_tlast;   // t_last
 	reg [C_M_AXIS_TDATA_WIDTH - 1 : 0] 	axis_tdata;    // FIFO implementation signals
+
+	assign M_AXIS_TDATA = axis_tdata;
 
 	reg                                 last_frame_sync;
 
 	reg module_ready;
 
 	reg fifo_rd_en = FALSE;
+	assign DEBUG_fifo_rd_en = fifo_rd_en;
 	wire [C_M_AXIS_TDATA_WIDTH - 1: 0] current_fifo_read_data;
 
 	reg [64 - 1: 0] current_sampling_data_points;
@@ -203,10 +238,18 @@ module vuprs_adc_controller_v2_0_M00_AXIS #
 	wire fifo_rd_rst_busy;
 
 	reg fifo_reset = LOW;
+	
+	reg software_rst_sync_adc_00 = FALSE;
+	reg software_rst_sync_adc_01 = FALSE;
+	reg software_rst_sync_adc = FALSE;
 
-	reg [C_M_AXIS_TDATA_WIDTH - 1: 0] send_buffer[0: C_M_AXIS_BUFFER_SIZE - 1];
+	reg software_rst_sync_axi = FALSE;
+
+	reg [C_M_AXIS_TDATA_WIDTH - 1: 0] send_buffer[0: C_M_AXIS_BUFFER_SIZE];  // 32, send_buffer[32] is invalid
 	reg [BUFFER_POINTER_BITS -1: 0] buffer_pointer;
 	reg reset_buffer = FALSE;
+
+	assign DEBUG_buffer_pointer = buffer_pointer;
 
 	reg buffer_over_flow = FALSE;
 	reg buffer_pointer_error = FALSE;
@@ -255,12 +298,13 @@ module vuprs_adc_controller_v2_0_M00_AXIS #
 	wire adc_b_ready;
 	wire [3: 0] adc_b_err;
 
+	reg adc_have_sampled = FALSE;
+
 	/* User Registers end */
 
 	// I/O Connections assignments
 
-	assign M_AXIS_TVALID = (buffer_pointer != INVALID_BUFFER_POINTER);
-	assign M_AXIS_TDATA	 = axis_tdata;
+	assign M_AXIS_TVALID = (buffer_pointer != INVALID_BUFFER_POINTER) && (mst_exec_state == EXEC_STATE__SEND_STREAM);  // tvalid signal
 	assign M_AXIS_TLAST	 = axis_tlast;
 
 	assign ready = module_ready;
@@ -270,108 +314,141 @@ module vuprs_adc_controller_v2_0_M00_AXIS #
 
 	`define ONE_VALID_DATA_SEND_AT_THAT_TIME (axis_hand_shake)
 
+	`define ONE_VALID_DATA_PUSHED_IN_FIFO (fifo_write_en && !fifo_full)
+	`define ADC_SAMPLING_COMPLETE (!adc_a_sampling && !adc_b_sampling)
+
 	/* --------------------------------------------------------------------------------------------------------- */
 	/* ---------------------------------------- AXI-Stream CLOCK DOMAIN ---------------------------------------- */
 	/* --------------------------------------------------------------------------------------------------------- */
 
+	/* ---------------------------------------------- T_DATA --------------------------------------------------- */
+
+	always @(*) begin
+		axis_tdata = send_buffer[buffer_pointer];
+	end
+
 	/* ---------------------------------------------- Buffer --------------------------------------------------- */
+
+	always @(posedge M_AXIS_ACLK) begin
+		if (!adc_rst_n) software_rst_sync_axi <= FALSE;
+		else software_rst_sync_axi <= software_rst;
+	end
 
 	integer i;
 
 	always @(posedge M_AXIS_ACLK) begin
-		if (!M_AXIS_ARESETN || reset_buffer || buffer_pointer_error) begin
+		if (!M_AXIS_ARESETN || reset_buffer || buffer_pointer_error || software_rst_sync_axi) begin
 
 			for (i = 0; i <= C_M_AXIS_BUFFER_SIZE - 1; i = i + 1) begin
 				send_buffer[i] <= 0;
 			end
+			send_buffer[INVALID_BUFFER_POINTER] <= INVALID_BUFFER_DATA;
 			buffer_pointer <= INVALID_BUFFER_POINTER;
 
 			buffer_over_flow <= FALSE;
 			buffer_pointer_error <= FALSE;
 
+			fifo_rd_en <= FALSE;
+
 		end else begin
 
 			/* push buffer at first */
 
-			if (buffer_pointer == INVALID_BUFFER_POINTER) begin  // t_valid = LOW at that moment
+			if (mst_exec_state == EXEC_STATE__SEND_STREAM) begin
 
-				/* if FIFO read enable at that time, push FIFO data to buffer */
+				if (buffer_pointer == INVALID_BUFFER_POINTER) begin  // t_valid = LOW at that moment
 
-				if (fifo_rd_en) begin
-					send_buffer[0] <= current_fifo_read_data;
-					buffer_pointer <= 0;
-				end else begin
-					buffer_pointer <= buffer_pointer;
-				end
+					/* if FIFO read enable at that time, push FIFO data to buffer */
 
-				/* Enable FIFO reading */
-
-				if(!fifo_almost_empty) fifo_rd_en <= TRUE;
-				else fifo_rd_en <= FALSE;
-
-			end else if (buffer_pointer <= C_M_AXIS_BUFFER_SIZE - 1) begin
-
-				if (fifo_rd_en) begin  // the data must be push into buffer
-
-					/* FIFO read control */
-					
-					if (buffer_pointer >= C_M_AXIS_BUFFER_SIZE - 2) begin
-						fifo_rd_en <= FALSE;  // this is the last data (pointer is C_M_AXIS_BUFFER_SIZE - 1), stop read
+					if (fifo_rd_en) begin
+						send_buffer[0] <= current_fifo_read_data;
+						buffer_pointer <= 0;
 					end else begin
-						if (!fifo_almost_empty) fifo_rd_en <= TRUE;  // continue read
-						else fifo_rd_en <= FALSE;
+						buffer_pointer <= buffer_pointer;
 					end
 
-					/* Update buffer */
+					/* Enable FIFO reading */
 
-					for (i = 0; i <= C_M_AXIS_BUFFER_SIZE - 2; i = i + 1) begin
-						send_buffer[i + 1] <= send_buffer[i];
-					end
-					send_buffer[0] <= current_fifo_read_data;
+					if(!fifo_almost_empty) fifo_rd_en <= TRUE;
+					else fifo_rd_en <= FALSE;
 
-					/* Update pointer */
-					
-					if (!`ONE_VALID_DATA_SEND_AT_THAT_TIME) begin
+				end else if (buffer_pointer <= C_M_AXIS_BUFFER_SIZE - 1) begin
 
-						if (buffer_pointer <= C_M_AXIS_BUFFER_SIZE - 2) buffer_pointer <= buffer_pointer + 1;
-						else begin
-							/* buffer_pointer == C_M_AXIS_BUFFER_SIZE - 1, data must be send */
-							/* Buffer overflow */
-							buffer_over_flow <= TRUE;
+					if (fifo_rd_en) begin  // the data must be push into buffer
+
+						/* FIFO read control */
+
+						if (buffer_pointer >= C_M_AXIS_BUFFER_SIZE - 2) begin
+							fifo_rd_en <= FALSE;  // this is the last data (pointer is C_M_AXIS_BUFFER_SIZE - 1), stop read
+						end else begin
+							if (!fifo_almost_empty) fifo_rd_en <= TRUE;  // continue read
+							else fifo_rd_en <= FALSE;
+						end
+
+						/* -------------------------------------------------------------------------------------- */
+						/* ------------------------------------- Update data ------------------------------------ */
+						/* -------------------------------------------------------------------------------------- */
+
+						/* Update buffer */
+
+						for (i = 0; i <= C_M_AXIS_BUFFER_SIZE - 2; i = i + 1) begin
+							send_buffer[i + 1] <= send_buffer[i];
+						end
+						send_buffer[0] <= current_fifo_read_data;
+
+						/* Update pointer */
+
+						if (!`ONE_VALID_DATA_SEND_AT_THAT_TIME) begin
+
+							if (buffer_pointer <= C_M_AXIS_BUFFER_SIZE - 2) buffer_pointer <= buffer_pointer + 1;  /*  */
+							else begin
+								/* buffer_pointer == C_M_AXIS_BUFFER_SIZE - 1, data must be send */
+								/* Buffer overflow */
+								buffer_over_flow <= TRUE;
+							end
+
+						end else begin
+
+							buffer_pointer <= buffer_pointer;  // do nothing for pointer
+
 						end
 
 					end else begin
 
-						buffer_pointer <= buffer_pointer;  // do nothing for pointer
+						/* Enable FIFO read signal */
 
-					end
+						if(!fifo_almost_empty) begin
 
-				end else begin
+							/* continue read */
 
-					/* Enable FIFO read signal */
+							if (buffer_pointer == C_M_AXIS_BUFFER_SIZE - 1) fifo_rd_en <= FALSE;  // cannot read any more
+							else fifo_rd_en <= TRUE;
 
-					if(!fifo_almost_empty) begin
-						if (buffer_pointer == C_M_AXIS_BUFFER_SIZE - 1) fifo_rd_en <= FALSE;  // cannot read any more
-						else fifo_rd_en <= TRUE;
-					end
-					else fifo_rd_en <= FALSE;
+						end
+						else fifo_rd_en <= FALSE;
 
-					/* Update buffer pointer */
+						/* Update buffer pointer */
 
-					if (!`ONE_VALID_DATA_SEND_AT_THAT_TIME) begin
-						buffer_pointer <= buffer_pointer;  // do nothing for pointer
-					end else begin
-						if (buffer_pointer == 0) buffer_pointer <= INVALID_BUFFER_POINTER;
-						else buffer_pointer <= buffer_pointer - 1;
+						if (!`ONE_VALID_DATA_SEND_AT_THAT_TIME) begin
+							buffer_pointer <= buffer_pointer;  // do nothing for pointer
+						end else begin
+							if (buffer_pointer == 0) buffer_pointer <= INVALID_BUFFER_POINTER;
+							else buffer_pointer <= buffer_pointer - 1;
+						end
+
 					end
 
 				end
 
-			end
+				else begin
 
-			else begin
+					buffer_pointer_error <= TRUE;  // CRITICAL: BUFFER POINTER ERROR !!!!!
 
-				buffer_pointer_error <= TRUE;  // CRITICAL: BUFFER POINTER ERROR !!!!!
+				end
+
+			end else begin
+				
+				fifo_rd_en <= FALSE;  // reset fifo
 
 			end
 		end
@@ -380,7 +457,7 @@ module vuprs_adc_controller_v2_0_M00_AXIS #
 	/* ------------------------------------------- Data Input -------------------------------------------------- */
 
 	always @(posedge M_AXIS_ACLK) begin
-		if (!M_AXIS_ARESETN) begin
+		if (!M_AXIS_ARESETN || software_rst_sync_axi) begin
 			current_sampling_data_points <= 0;
 			last_frame_sync <= FALSE;
 		end else begin
@@ -394,7 +471,7 @@ module vuprs_adc_controller_v2_0_M00_AXIS #
 	/* ----------------------------------------- Detect rising edge --------------------------------------------- */
 
 	always @(posedge M_AXIS_ACLK) begin
-		if (!M_AXIS_ARESETN) begin
+		if (!M_AXIS_ARESETN || software_rst_sync_axi) begin
 			one_frame_sampling_trigger_sync1 <= LOW;
 			one_frame_sampling_trigger_sync2 <= LOW;
 		end else begin
@@ -407,20 +484,79 @@ module vuprs_adc_controller_v2_0_M00_AXIS #
 
 	/* ---------------------------------------- System state --------------------------------------------------- */
 
+	/* --------------------------------------------------------------------------------------------------------- */
+	/* ---------------------------------------- ADC CLOCK DOMAIN START ------------------------------------------ */
+	/* --------------------------------------------------------------------------------------------------------- */
+
+	always @(posedge adc_clk) begin
+		if (!adc_rst_n || software_rst_sync_adc) begin
+			mst_exec_state_sync <= EXEC_STATE__IDLE;
+			mst_exec_state_sync00 <= EXEC_STATE__IDLE;
+			mst_exec_state_sync01 <= EXEC_STATE__IDLE;
+		end else begin
+			mst_exec_state_sync00 <= mst_exec_state;
+			mst_exec_state_sync01 <= mst_exec_state_sync00;
+			mst_exec_state_sync <= mst_exec_state_sync01;
+		end
+	end
+
+	always @(posedge adc_clk) begin
+		if (!adc_rst_n || software_rst_sync_adc) begin
+			fifo_reset_count <= 0;
+			fifo_reset_count2 <= 0;
+			fifo_reset <= LOW;  // start reset fifo
+		end else begin
+		  	case (mst_exec_state_sync)
+				
+				EXEC_STATE__INIT_COUNTER: begin
+					if (fifo_reset_count <= FIFO_RESET_CLOCK_COUNT) begin  /* reset sequence 1 */
+						if (fifo_reset == HIGH) fifo_reset_count <= fifo_reset_count + 1;
+						else fifo_reset <= HIGH;
+						fifo_reset_count2 <= 0;
+					end else begin  /* reset sequence 2 */
+						fifo_reset <= LOW;
+						fifo_reset_count2 <= fifo_reset_count2 + 1;
+					end
+				end
+
+				default: begin
+					fifo_reset <= LOW;
+					fifo_reset_count <= 0;
+					fifo_reset_count2 <= 0;
+				end
+
+			endcase
+		end
+	end
+
+	/* --------------------------------------------------------------------------------------------------------- */
+	/* ---------------------------------------- ADC CLOCK DOMAIN END ------------------------------------------- */
+	/* --------------------------------------------------------------------------------------------------------- */
+
+	always @(posedge M_AXIS_ACLK) begin
+		if (!M_AXIS_ARESETN || software_rst_sync_axi) begin
+			fifo_reset_count2_sync_00 <= 0;
+			fifo_reset_count2_sync_01 <= 0;
+			fifo_reset_count2_sync <= 0;
+		end else begin
+			fifo_reset_count2_sync_00 <= fifo_reset_count2;
+			fifo_reset_count2_sync_01 <= fifo_reset_count2_sync_00;
+			fifo_reset_count2_sync <= fifo_reset_count2_sync_01;
+		end
+	end
+
 	/* Flags */
 	
 	always @(posedge M_AXIS_ACLK) begin
 	
-		if (!M_AXIS_ARESETN) begin
+		if (!M_AXIS_ARESETN || software_rst_sync_axi) begin
 
 			mst_exec_state <= EXEC_STATE__IDLE;
 			init_count <= 0;
-			fifo_reset_count <= 0;
-			axis_tvalid <= LOW;
+			
+			// axis_tvalid <= LOW;
 
 			module_ready <= TRUE;
-
-			fifo_reset <= HIGH;  // start reset fifo
 			reset_buffer <= TRUE;  // start reset buffer
 
 		end else begin
@@ -428,55 +564,55 @@ module vuprs_adc_controller_v2_0_M00_AXIS #
 
 				EXEC_STATE__IDLE: begin
 
-					axis_tvalid <= LOW;
+					reset_buffer <= TRUE;  // start reset buffer
+
+					// axis_tvalid <= LOW;
 
 					if (one_frame_sampling_trigger_rising_edge) begin
 
 						mst_exec_state <= EXEC_STATE__INIT_COUNTER;
-						module_ready <= FALSE;
-
+						module_ready <= FALSE;  // sampling flag to TRUE
 						init_count <= 0;
-						fifo_reset_count <= 0;
-
-						fifo_reset <= HIGH;  // start reset fifo
-						reset_buffer <= TRUE;  // start reset buffer
-
+						
 					end else begin
 
 						module_ready <= TRUE;
-
+						
 					end
 				end
 
 				EXEC_STATE__INIT_COUNTER: begin  // reset fifo
 
-					axis_tvalid <= LOW;
+					init_count <= init_count + 1;
 
-					if (init_count >= FIFO_RESET_CLOCK_COUNT + 1) begin
+					if (init_count >= BUFFER_RESET_CLOCK_COUNT) begin
 
-						fifo_reset_count <= fifo_reset_count + 1;
+						reset_buffer <= FALSE;
 
-						if (((!fifo_wr_rst_busy && !fifo_rd_rst_busy) && buffer_pointer == INVALID_BUFFER_POINTER && fifo_reset_count >= FIFO_RESET_CLOCK_COUNT_2) || 
-							fifo_reset_count >= FIFO_RESET_WAIT_MAX_COUNT) begin 
-							mst_exec_state <= EXEC_STATE__SEND_STREAM;  // reset fifo
+						if (((!fifo_wr_rst_busy && !fifo_rd_rst_busy) && 
+							  buffer_pointer == INVALID_BUFFER_POINTER && 
+							  fifo_reset_count2_sync >= FIFO_RESET_CLOCK_COUNT_2) || 
+						      init_count >= FIFO_RESET_WAIT_MAX_COUNT) begin 
+
+							mst_exec_state <= EXEC_STATE__SEND_STREAM;  // state jump
+
 						end
 
 					end else begin
 
-						init_count <= init_count + 1;
-
-						if (init_count >= BUFFER_RESET_CLOCK_COUNT) reset_buffer <= FALSE;
-						else if (init_count >= FIFO_RESET_CLOCK_COUNT) fifo_reset <= LOW;  // detect full & empty
-						else fifo_reset_count <= 0;  // to 0
-						
+						reset_buffer <= TRUE;
+					
 					end
 
 				end
 
 				EXEC_STATE__SEND_STREAM: begin
-					axis_tvalid <= HIGH;
 					if (data_send_count >= current_sampling_data_points - 1 && `ONE_VALID_DATA_SEND_AT_THAT_TIME) begin
 						mst_exec_state <= EXEC_STATE__IDLE;
+						reset_buffer <= TRUE;  // send complete, reset buffer
+					end else begin
+						mst_exec_state <= EXEC_STATE__SEND_STREAM;
+						reset_buffer <= FALSE;  // send not complete
 					end
 				end
 
@@ -497,16 +633,12 @@ module vuprs_adc_controller_v2_0_M00_AXIS #
 
 	always @(posedge M_AXIS_ACLK) begin
 	
-		if (!M_AXIS_ARESETN) begin
+		if (!M_AXIS_ARESETN || software_rst_sync_axi) begin
 
 			data_send_count <= 0;
-			axis_tdata <= INVALID_DATA;
 			axis_tlast <= LOW;
 			
 		end else begin
-
-			if (buffer_pointer != INVALID_BUFFER_POINTER) axis_tdata <= send_buffer[buffer_pointer];
-			else axis_tdata <= INVALID_DATA;
 
 			case (mst_exec_state)
 
@@ -562,17 +694,24 @@ module vuprs_adc_controller_v2_0_M00_AXIS #
 	reg [BIT_NUM - 1: 0] sampling_clk_counter;
 	reg sampling_clk = LOW;
 
-	reg sampling_clk_increment_sync;
-	reg mst_exec_state_sync;
+	reg [CONTROL_REGISTER_WIDTH - 1: 0] sampling_clk_increment_sync_00;
+	reg [CONTROL_REGISTER_WIDTH - 1: 0] sampling_clk_increment_sync_01;
+	reg [CONTROL_REGISTER_WIDTH - 1: 0] sampling_clk_increment_sync;
 
 	/* FIFO write logic registers  */
 	
 	reg [2: 0] fifo_write_state = FIFO_WRITE_STATE__IDLE;
+	assign DEBUG_fifo_write_state = fifo_write_state;
 	
 	reg [7: 0] fifo_pushed_number = 8'd0;
+	assign DEBUG_fifo_pushed_number = fifo_pushed_number;
+	
 	reg [C_M_AXIS_TDATA_WIDTH - 1: 0] current_fifo_write_data = INVALID_DATA;
+	assign DEBUG_current_fifo_write_data = current_fifo_write_data;
 	
 	reg fifo_write_en = 1'b0;
+	assign DEBUG_fifo_write_en = fifo_write_en;
+
 	reg adc_data_have_pushed = 1'b0;
 	reg crc_have_calculated = 1'b0;
 
@@ -583,61 +722,83 @@ module vuprs_adc_controller_v2_0_M00_AXIS #
 	reg [7: 0] crc_source_l;
 
 	reg crc_rst_n;
-	reg crc_rst_n_sync1;
-	reg crc_rst_n_sync2;
-
-	reg crc_en;
+	reg crc_start = FALSE;
+	reg crc_rd_clk;
 
 	reg [7: 0] crc_calculated_channels = 0;
+	assign DEBUG_crc_calculated_channels = crc_calculated_channels;
+
+	/* sync 0: software rst */
+
+	always @(posedge adc_clk) begin
+		if (!adc_rst_n) begin
+			software_rst_sync_adc_00 <= FALSE;
+			software_rst_sync_adc_01 <= FALSE;
+			software_rst_sync_adc <= FALSE;
+		end else begin
+			software_rst_sync_adc_00 <= software_rst;
+			software_rst_sync_adc_01 <= software_rst_sync_adc_00;
+			software_rst_sync_adc <= software_rst_sync_adc_01;
+		end
+	end
 
 	/* sync 1 */
 
 	always @(posedge adc_clk) begin
-		if (!adc_rst_n) sampling_clk_increment_sync <= 0;
-		else if (mst_exec_state_sync == EXEC_STATE__IDLE) sampling_clk_increment_sync <= sampling_clk_increment;
-	end
+		if (!adc_rst_n || software_rst_sync_adc) begin
+			
+			sampling_clk_increment_sync_00 <= ADC_DEFAULT_CLOCK_INCREMENT;
+			sampling_clk_increment_sync_01 <= ADC_DEFAULT_CLOCK_INCREMENT;
+			sampling_clk_increment_sync <= ADC_DEFAULT_CLOCK_INCREMENT;
 
-	/* sync 2 */
+		end else if (mst_exec_state_sync == EXEC_STATE__IDLE) begin
 
-	always @(posedge adc_clk) begin
-		if (!adc_rst_n) mst_exec_state_sync <= EXEC_STATE__IDLE;
-		else mst_exec_state_sync <= mst_exec_state;
-	end
+			if (sampling_clk_increment >= MINIUM_SAMPLING_CLK_INCREMENT) sampling_clk_increment_sync_00 <= sampling_clk_increment;
+			else sampling_clk_increment_sync_00 <= sampling_clk_increment_sync_00;
 
-	/* sync 3 */
-
-	always @(posedge adc_clk) begin
-		if (!adc_rst_n) begin
-			crc_rst_n_sync1 <= HIGH;
-			crc_rst_n_sync2 <= HIGH;
-		end else begin
-			crc_rst_n_sync2 <= crc_rst_n_sync1;
-			crc_rst_n_sync1 <= crc_rst_n;
+			sampling_clk_increment_sync_01 <= sampling_clk_increment_sync_00;
+			sampling_clk_increment_sync <= sampling_clk_increment_sync_01;
 		end
 	end
-
-	wire falling_edge_crc_rst_n = !(crc_rst_n_sync1) && crc_rst_n_sync2;  /* latency = 1 */
 
 	/* ---------------------------------------- AD sampling clock ---------------------------------------------- */
 
 	always @(posedge adc_clk) begin
-		if (!adc_rst_n) begin
+		if (!adc_rst_n || software_rst_sync_adc) begin
+
 			sampling_clk_counter <= 0;
 			sampling_clk <= LOW;
+
+			adc_have_sampled <= FALSE;
+			
 		end else begin
 
 			/* Generate sample clock at SEND STREAM state */
 
-			if (mst_exec_state_sync == EXEC_STATE__SEND_STREAM) begin
+			if (mst_exec_state_sync != EXEC_STATE__IDLE) begin  /* Start generate clock in advance */
+
 				if (sampling_clk_counter >= sampling_clk_increment_sync - 1) begin
+
 					sampling_clk_counter <= 0;
-					sampling_clk = ~sampling_clk;
+					sampling_clk <= ~sampling_clk;
+
 				end else begin
+
 					sampling_clk_counter <= sampling_clk_counter + 1;
+
 				end
+
+				if (!`ADC_SAMPLING_COMPLETE) begin
+					adc_have_sampled <= TRUE;
+				end
+
 			end else begin
+
 				sampling_clk_counter <= 0;
 				sampling_clk <= LOW;
+
+				adc_have_sampled <= FALSE;
+
 			end
 		end
 	end
@@ -646,68 +807,71 @@ module vuprs_adc_controller_v2_0_M00_AXIS #
 
 	/* Flags */
 
-	`define ONE_VALID_DATA_PUSHED_IN_FIFO (fifo_write_en && !fifo_full)
-
 	always @(posedge adc_clk) begin
 
-	   	if (!adc_rst_n) begin
+	   	if (!adc_rst_n || software_rst_sync_adc) begin
 
 	        fifo_write_state <= FIFO_WRITE_STATE__IDLE;
 			adc_data_have_pushed <= FALSE;
 			crc_have_calculated <= FALSE;
-	        
+
 	    end else begin
 
-			case (fifo_write_state)
+			if (mst_exec_state_sync == EXEC_STATE__SEND_STREAM) begin
 
-			FIFO_WRITE_STATE__IDLE: begin
-			
-				if (!adc_a_sampling && !adc_b_sampling) begin  // sampling complete
+				case (fifo_write_state)
 
-					if (!adc_data_have_pushed && !crc_have_calculated) begin
-						fifo_write_state <= FIFO_WRITE_STATE__CRC;  // write the adc data to FIFO
+				FIFO_WRITE_STATE__IDLE: begin
+
+					if (`ADC_SAMPLING_COMPLETE && adc_have_sampled) begin  // last sampling complete
+
+						if (!adc_data_have_pushed && !crc_have_calculated) begin
+							fifo_write_state <= FIFO_WRITE_STATE__CRC;  // write the adc data to FIFO
+						end
+						else fifo_write_state <= FIFO_WRITE_STATE__IDLE;
+
+					end else begin // sampling not complete, update adc_data_have_pushed flag
+
+						fifo_write_state <= FIFO_WRITE_STATE__IDLE;
+
+						adc_data_have_pushed <= FALSE;
+						crc_have_calculated <= FALSE;
+
 					end
-					else fifo_write_state <= FIFO_WRITE_STATE__IDLE;
-
-				end else begin // sampling not complete, update adc_data_have_pushed flag
-
-					fifo_write_state <= FIFO_WRITE_STATE__IDLE;
-					adc_data_have_pushed <= FALSE;
-					crc_calculated_channels <= FALSE;
 
 				end
 
-			end
+				FIFO_WRITE_STATE__CRC: begin
 
-			FIFO_WRITE_STATE__CRC: begin
-				if (crc_calculated_channels >= 8'd15) begin  /* calculated 16 jump */
-					fifo_write_state <= FIFO_WRITE_STATE__WRITE_FIFO;
-					crc_have_calculated <= TRUE;
+					if (crc_calculated_channels >= 8'd17) begin  /* calculated 16, jump */
+						fifo_write_state <= FIFO_WRITE_STATE__WRITE_FIFO;
+						crc_have_calculated <= TRUE;
+					end
 				end
-			end
 
-			FIFO_WRITE_STATE__WRITE_FIFO: begin
+				FIFO_WRITE_STATE__WRITE_FIFO: begin
 				
-				if (fifo_pushed_number >= 8'd17 && `ONE_VALID_DATA_PUSHED_IN_FIFO) begin  /* Pushed 18, jump */
+					if (fifo_pushed_number >= 8'd17 && `ONE_VALID_DATA_PUSHED_IN_FIFO) begin  /* Pushed 18, jump */
 
-					fifo_write_state <= FIFO_WRITE_STATE__IDLE;
-					adc_data_have_pushed <= TRUE;
+						fifo_write_state <= FIFO_WRITE_STATE__IDLE;
+						adc_data_have_pushed <= TRUE;
+
+					end
 
 				end
-
-			end
 			
-			default: fifo_write_state <= FIFO_WRITE_STATE__IDLE;
+				default: fifo_write_state <= FIFO_WRITE_STATE__IDLE;
 
-			endcase
-				
+				endcase
+
+			end
 		end
 	end
 
 	/* Registers */
 
 	always @(posedge adc_clk) begin
-	   	if (!adc_rst_n) begin
+	   	if (!adc_rst_n || software_rst_sync_adc) begin
 
 	        fifo_write_en <= FALSE;
 			current_fifo_write_data <= {(C_M_AXIS_TDATA_WIDTH){1'b1}};
@@ -715,157 +879,144 @@ module vuprs_adc_controller_v2_0_M00_AXIS #
 			fifo_pushed_number <= 0;
 			crc_calculated_channels <= 0;
 
-			crc_rst_n <= HIGH;
-			crc_en <= TRUE;
-
+			crc_rst_n <= LOW;
+			
 	    end else begin
-	       
-	       	case(fifo_write_state)
-	       
-	           	FIFO_WRITE_STATE__IDLE: begin
 
-					crc_calculated_channels <= 0;
+			crc_rst_n <= HIGH;
 
-					if (!adc_a_sampling && !adc_b_sampling && !adc_data_have_pushed && !crc_have_calculated) begin  // state jump situation
+			if (mst_exec_state_sync == EXEC_STATE__SEND_STREAM) begin
 
-						crc_source_h <= adc_a_ch1[15: 8];  /* ready to CRC */
-						crc_source_l <= adc_a_ch1[7: 0];
+	       		case(fifo_write_state)
 
-						crc_rst_n <= LOW;  /* make falling edge */
-						crc_en <= TRUE;
+	        	   	FIFO_WRITE_STATE__IDLE: begin
 
-					end else begin
-						crc_rst_n <= HIGH;  
-						crc_en <= FALSE;
-					end
+						crc_calculated_channels <= 0;
+						fifo_write_en <= FALSE;
+						
+						if (`ADC_SAMPLING_COMPLETE && (!adc_data_have_pushed && !crc_have_calculated)) begin  // state jump situation
 
-	            end
-
-				FIFO_WRITE_STATE__CRC: begin
-
-					fifo_pushed_number <= 0;
-					fifo_write_en <= FALSE;
-
-					if (crc_calculated_channels >= 8'd15) begin
-
-						current_fifo_write_data <= FRAME_HEADER;  /* ready to push FIFO */
-
-						if (fifo_almost_full) fifo_write_en <= FALSE;
-						else fifo_write_en <= TRUE;
-
-					end else begin
-
-						current_fifo_write_data <= {(C_M_AXIS_TDATA_WIDTH){1'b1}};
-
-						/* Use crc_rst_n_sync1 to make a latency of 1 */
-
-						if (falling_edge_crc_rst_n && crc_calculated_channels <= 8'd15) begin
-
-							crc_calculated_channels <= crc_calculated_channels + 1;
-							crc_rst_n <= HIGH;
-
-							case (crc_calculated_channels)
-								8'd0: begin
-									adc_a_ch1_crc <= {crc_result_h, crc_result_l};
-									crc_source_h <= adc_a_ch2[15: 8];
-									crc_source_l <= adc_a_ch2[7: 0];
-								end
-								8'd1: begin
-									adc_a_ch2_crc <= {crc_result_h, crc_result_l};
-									crc_source_h <= adc_a_ch3[15: 8];
-									crc_source_l <= adc_a_ch3[7: 0];
-								end
-								8'd2: begin
-									adc_a_ch3_crc <= {crc_result_h, crc_result_l};
-									crc_source_h <= adc_a_ch4[15: 8];
-									crc_source_l <= adc_a_ch4[7: 0];
-								end
-								8'd3: begin
-									adc_a_ch4_crc <= {crc_result_h, crc_result_l};
-									crc_source_h <= adc_a_ch5[15: 8];
-									crc_source_l <= adc_a_ch5[7: 0];
-								end
-								8'd4: begin
-									adc_a_ch5_crc <= {crc_result_h, crc_result_l};
-									crc_source_h <= adc_a_ch6[15: 8];
-									crc_source_l <= adc_a_ch6[7: 0];
-								end
-								8'd5: begin
-									adc_a_ch6_crc <= {crc_result_h, crc_result_l};
-									crc_source_h <= adc_a_ch7[15: 8];
-									crc_source_l <= adc_a_ch7[7: 0];
-								end
-								8'd6: begin
-									adc_a_ch7_crc <= {crc_result_h, crc_result_l};
-									crc_source_h <= adc_a_ch8[15: 8];
-									crc_source_l <= adc_a_ch8[7: 0];
-								end
-								8'd7: begin
-									adc_a_ch8_crc <= {crc_result_h, crc_result_l};
-									crc_source_h <= adc_b_ch1[15: 8];
-									crc_source_l <= adc_b_ch1[7: 0];
-								end
-								8'd8: begin
-									adc_b_ch1_crc <= {crc_result_h, crc_result_l};
-									crc_source_h <= adc_b_ch2[15: 8];
-									crc_source_l <= adc_b_ch2[7: 0];
-								end
-								8'd9: begin
-									adc_b_ch2_crc <= {crc_result_h, crc_result_l};
-									crc_source_h <= adc_b_ch3[15: 8];
-									crc_source_l <= adc_b_ch3[7: 0];
-								end
-								8'd10: begin
-									adc_b_ch3_crc <= {crc_result_h, crc_result_l};
-									crc_source_h <= adc_b_ch4[15: 8];
-									crc_source_l <= adc_b_ch4[7: 0];
-								end
-								8'd11: begin
-									adc_b_ch4_crc <= {crc_result_h, crc_result_l};
-									crc_source_h <= adc_b_ch5[15: 8];
-									crc_source_l <= adc_b_ch5[7: 0];
-								end
-								8'd12: begin
-									adc_b_ch5_crc <= {crc_result_h, crc_result_l};
-									crc_source_h <= adc_b_ch6[15: 8];
-									crc_source_l <= adc_b_ch6[7: 0];
-								end
-								8'd13: begin
-									adc_b_ch6_crc <= {crc_result_h, crc_result_l};
-									crc_source_h <= adc_b_ch7[15: 8];
-									crc_source_l <= adc_b_ch7[7: 0];
-								end
-								8'd14: begin
-									adc_b_ch7_crc <= {crc_result_h, crc_result_l};
-									crc_source_h <= adc_b_ch8[15: 8];
-									crc_source_l <= adc_b_ch8[7: 0];
-								end
-								8'd15: begin
-									adc_b_ch8_crc <= {crc_result_h, crc_result_l};  /* calculated = 16, jump */
-								end
-
-								default: ;
-								
-							endcase
-
-							if (crc_calculated_channels <= 8'd14) crc_en <= TRUE;  /* calculated 15 */
-							else crc_en <= FALSE;  /* calculated 16 */
-
-						end else if (crc_calculated_channels <= 8'd14) begin  /* calculated 15, continue */
-
-							/* generate new negedge of crc_rst_n */
-
-							if (crc_rst_n == HIGH) crc_rst_n <= LOW;
-							else if (crc_rst_n == LOW && crc_rst_n_sync1 == LOW && crc_rst_n_sync2 == LOW) crc_rst_n <= HIGH;
+							crc_source_h <= adc_a_ch1[15: 8];  /* ready to CRC */
+							crc_source_l <= adc_a_ch1[7: 0];
 
 						end
-						
-					end
-				end
-	               
-	           	FIFO_WRITE_STATE__WRITE_FIFO: begin
 
-					if (fifo_write_en) begin
+	        	    end
+
+					FIFO_WRITE_STATE__CRC: begin
+
+						if (crc_calculated_channels >= 8'd17) begin  /* state jump situation */
+
+							current_fifo_write_data <= FRAME_HEADER;  /* ready to push FIFO */
+
+							if (fifo_almost_full) fifo_write_en <= FALSE;
+							else fifo_write_en <= TRUE;
+
+							fifo_pushed_number <= 0;
+
+						end else begin
+
+							fifo_write_en <= FALSE;
+							current_fifo_write_data <= {(C_M_AXIS_TDATA_WIDTH){1'b1}};
+
+							if (crc_calculated_channels <= 8'd16) begin
+
+								crc_calculated_channels <= crc_calculated_channels + 1;
+
+								/* NOTE: LATENCY == 2! */
+
+								case (crc_calculated_channels)
+									8'd0: begin
+										crc_source_h <= adc_a_ch2[15: 8];
+										crc_source_l <= adc_a_ch2[7: 0];
+									end
+									8'd1: begin
+										adc_a_ch1_crc <= {crc_result_h, crc_result_l};
+										crc_source_h <= adc_a_ch3[15: 8];
+										crc_source_l <= adc_a_ch3[7: 0];
+									end
+									8'd2: begin
+										adc_a_ch2_crc <= {crc_result_h, crc_result_l};
+										crc_source_h <= adc_a_ch4[15: 8];
+										crc_source_l <= adc_a_ch4[7: 0];
+									end
+									8'd3: begin
+										adc_a_ch3_crc <= {crc_result_h, crc_result_l};
+										crc_source_h <= adc_a_ch5[15: 8];
+										crc_source_l <= adc_a_ch5[7: 0];
+									end
+									8'd4: begin
+										adc_a_ch4_crc <= {crc_result_h, crc_result_l};
+										crc_source_h <= adc_a_ch6[15: 8];
+										crc_source_l <= adc_a_ch6[7: 0];
+									end
+									8'd5: begin
+										adc_a_ch5_crc <= {crc_result_h, crc_result_l};
+										crc_source_h <= adc_a_ch7[15: 8];
+										crc_source_l <= adc_a_ch7[7: 0];
+									end
+									8'd6: begin
+										adc_a_ch6_crc <= {crc_result_h, crc_result_l};
+										crc_source_h <= adc_a_ch8[15: 8];
+										crc_source_l <= adc_a_ch8[7: 0];
+									end
+									8'd7: begin
+										adc_a_ch7_crc <= {crc_result_h, crc_result_l};
+										crc_source_h <= adc_b_ch1[15: 8];
+										crc_source_l <= adc_b_ch1[7: 0];
+									end
+									8'd8: begin
+										adc_a_ch8_crc <= {crc_result_h, crc_result_l};
+										crc_source_h <= adc_b_ch2[15: 8];
+										crc_source_l <= adc_b_ch2[7: 0];
+									end
+									8'd9: begin
+										adc_b_ch1_crc <= {crc_result_h, crc_result_l};
+										crc_source_h <= adc_b_ch3[15: 8];
+										crc_source_l <= adc_b_ch3[7: 0];
+									end
+									8'd10: begin
+										adc_b_ch2_crc <= {crc_result_h, crc_result_l};
+										crc_source_h <= adc_b_ch4[15: 8];
+										crc_source_l <= adc_b_ch4[7: 0];
+									end
+									8'd11: begin
+										adc_b_ch3_crc <= {crc_result_h, crc_result_l};
+										crc_source_h <= adc_b_ch5[15: 8];
+										crc_source_l <= adc_b_ch5[7: 0];
+									end
+									8'd12: begin
+										adc_b_ch4_crc <= {crc_result_h, crc_result_l};
+										crc_source_h <= adc_b_ch6[15: 8];
+										crc_source_l <= adc_b_ch6[7: 0];
+									end
+									8'd13: begin
+										adc_b_ch5_crc <= {crc_result_h, crc_result_l};
+										crc_source_h <= adc_b_ch7[15: 8];
+										crc_source_l <= adc_b_ch7[7: 0];
+									end
+									8'd14: begin
+										adc_b_ch6_crc <= {crc_result_h, crc_result_l};
+										crc_source_h <= adc_b_ch8[15: 8];
+										crc_source_l <= adc_b_ch8[7: 0];
+									end
+									8'd15: begin
+										adc_b_ch7_crc <= {crc_result_h, crc_result_l};  /* calculated = 16, jump */
+									end
+									8'd16: begin
+										adc_b_ch8_crc <= {crc_result_h, crc_result_l};  /* calculated = 16, jump */
+									end
+
+									default: ;
+
+								endcase
+
+							end
+
+						end
+					end
+
+	        	   	FIFO_WRITE_STATE__WRITE_FIFO: begin
 
 						if (`ONE_VALID_DATA_PUSHED_IN_FIFO) begin
 
@@ -891,34 +1042,46 @@ module vuprs_adc_controller_v2_0_M00_AXIS #
 								8'd15: current_fifo_write_data <= {adc_b_ch8, adc_b_ch8_crc};
 								8'd16: current_fifo_write_data <= FRAME_TAILER;  /* pushed 17, continue */
 
-								8'd17: current_fifo_write_data <= {(C_M_AXIS_TDATA_WIDTH){1'b1}};
-								
+								8'd17: current_fifo_write_data <= {(C_M_AXIS_TDATA_WIDTH){1'b1}};  /* pushed 18, jump */
+
 								default: current_fifo_write_data <= {(C_M_AXIS_TDATA_WIDTH){1'b1}};
 							endcase
 
 							if (fifo_pushed_number <= 8'd16) begin  /* when == 16, pushed 17, contiune */
-							
+
 								if (fifo_almost_full) fifo_write_en <= FALSE;  // last data of the fifo pushed at that time
 								else fifo_write_en <= TRUE;
 
-							end else begin
-							  
+							end else begin  /* fifo_pushed_number == 17, current pushed 18 */
+								
 								fifo_write_en <= FALSE;
+
+							end
+
+						end else begin
 							
+							if (fifo_pushed_number <= 8'd17) begin  /* current pushed 17, contiune */
+
+								if (fifo_almost_full) fifo_write_en <= FALSE;
+								else fifo_write_en <= TRUE;
+
+							end else begin
+								
+								fifo_write_en <= FALSE;
+
 							end
 
 						end
-									
-					end else begin
 
-						if (fifo_almost_full) fifo_write_en <= FALSE;  // the last data pushed at that time
-						else fifo_write_en <= TRUE;
+	        	    end
 
-					end
+	       		endcase
 
-	            end
-	              
-	       	endcase
+			end else begin
+				
+				fifo_write_en <= FALSE;  /* for reset */
+
+			end
 	    end
 	end
 
@@ -1050,23 +1213,19 @@ module vuprs_adc_controller_v2_0_M00_AXIS #
 
 	crc_smbus vuprs_crc_h
 	(
-
-  		.data_in(crc_source_h),  /* [7: 0] data in */
-  		.crc_en(crc_en),      /* crc_en */
   		.rst_n(crc_rst_n),       /* rst_n */
   		.clk(adc_clk),         /* clk */
 
+		.data_in(crc_source_h),  /* [7: 0] data in */
   		.crc_out(crc_result_h)   /* [7: 0] crc out */
 	);
 
 	crc_smbus vuprs_crc_l
 	(
-
-  		.data_in(crc_source_l),  /* [7: 0] data in */
-  		.crc_en(crc_en),      /* crc_en */
   		.rst_n(crc_rst_n),       /* rst_n */
   		.clk(adc_clk),         /* clk */
 
+		.data_in(crc_source_l),  /* [7: 0] data in */
   		.crc_out(crc_result_l)   /* [7: 0] crc out */
 	);
 

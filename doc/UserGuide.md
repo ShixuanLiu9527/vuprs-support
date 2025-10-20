@@ -58,7 +58,7 @@
 | `0x0C` | `STR` | `R/W` | Sampling Trigger & Ready |
 | `0x10` | `NGF` | `R` | Number of Generated Frames |
 | `0x14` | `ERR` | `R` | Error Flags of ADC |
-| `0x18` | `ERR` | `R` | Reset of ADC |
+| `0x18` | `RST` | `R/W` | Reset of ADC |
   
 **寄存器详细信息**  
   

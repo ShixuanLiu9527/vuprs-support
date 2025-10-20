@@ -27,8 +27,11 @@
 
 		output wire one_frame_sampling_trigger,                 /* sampling trigger */
 		output wire last_frame,                                 /* indicate this is the last frame */
+		output wire software_rst,
 		output wire fpga_sampling_led,
 		output wire fpga_adc_card_present_led,
+		
+		output wire [2: 0] DEBUG_frame_state,
 
 		// User ports ends
 		// Do not modify the ports beyond this line
@@ -141,7 +144,7 @@
 	reg [C_S_AXI_DATA_WIDTH-1:0]	slv_reg3;   // Ready & sampling trigger   (R)
 	reg [C_S_AXI_DATA_WIDTH-1:0]	slv_reg4;   // Number of Generated Frames (R)
 	reg [C_S_AXI_DATA_WIDTH-1:0]	slv_reg5;   // ADC Error Flag             (R)
-	reg [C_S_AXI_DATA_WIDTH-1:0]	slv_reg6;
+	reg [C_S_AXI_DATA_WIDTH-1:0]	slv_reg6;   // Software reset             (R/W)
 	reg [C_S_AXI_DATA_WIDTH-1:0]	slv_reg7;
 	wire	 slv_reg_rden;
 	wire	 slv_reg_wren;
@@ -171,6 +174,8 @@
 	reg [C_S_AXI_DATA_WIDTH-1 : 0] sampling_frames_reg = DEFAULT_SAMPLING_FRAMES;  /* sampling frames */
 
 	reg start_generate_frames = FALSE;
+	reg software_rst_reg = FALSE;
+	reg software_rst_reg_sync = FALSE;
 
 	reg sampling_trigger_control = LOW;
 	reg [C_S_AXI_DATA_WIDTH-1 : 0] generated_frames_count = 0;
@@ -185,14 +190,15 @@
 	assign sampling_clk_increment = sampling_clk_increment_reg;
 	assign sampling_points = sampling_points_reg;
 	assign last_frame = last_frame_reg;
+	assign software_rst = software_rst_reg;
+	
+	assign DEBUG_frame_state = frame_state;
 
 	/* led */
 
 	assign fpga_adc_card_present_led = ~adc_card_present_detect;
 	assign fpga_sampling_led = (frame_state != FRAME_STATE__IDLE);
 	
-	reg frame_have_triggered;
-
 	/* ------------------------------------------------------------------ */
 
 	always @( posedge S_AXI_ACLK )
@@ -292,8 +298,10 @@
 	    //   slv_reg3 <= 0;
 	    //   slv_reg4 <= 0;
 	    //   slv_reg5 <= 0;
-	      slv_reg6 <= 0;
+	    //   slv_reg6 <= 0;
 	      slv_reg7 <= 0;
+		  start_generate_frames <= FALSE;
+		  software_rst_reg <= FALSE;
 	    end 
 	  else begin
 	    if (slv_reg_wren)
@@ -346,12 +354,14 @@
 	            //     slv_reg5[(byte_index*8) +: 8] <= S_AXI_WDATA[(byte_index*8) +: 8];
 	            //   end  
 	          3'h6:
-	            for ( byte_index = 0; byte_index <= (C_S_AXI_DATA_WIDTH/8)-1; byte_index = byte_index+1 )
-	              if ( S_AXI_WSTRB[byte_index] == 1 ) begin
-	                // Respective byte enables are asserted as per write strobes 
-	                // Slave register 6
-	                slv_reg6[(byte_index*8) +: 8] <= S_AXI_WDATA[(byte_index*8) +: 8];
-	              end  
+
+			  	software_rst_reg <= TRUE;  // software reset
+	            // for ( byte_index = 0; byte_index <= (C_S_AXI_DATA_WIDTH/8)-1; byte_index = byte_index+1 )
+	            //   if ( S_AXI_WSTRB[byte_index] == 1 ) begin
+	            //     // Respective byte enables are asserted as per write strobes 
+	            //     // Slave register 6
+	            //     slv_reg6[(byte_index*8) +: 8] <= S_AXI_WDATA[(byte_index*8) +: 8];
+	            //   end  
 	          3'h7:
 	            for ( byte_index = 0; byte_index <= (C_S_AXI_DATA_WIDTH/8)-1; byte_index = byte_index+1 )
 	              if ( S_AXI_WSTRB[byte_index] == 1 ) begin
@@ -366,12 +376,13 @@
 	                    //   slv_reg3 <= slv_reg3;
 	                    //   slv_reg4 <= slv_reg4;
 	                    //   slv_reg5 <= slv_reg5;
-	                      slv_reg6 <= slv_reg6;
+	                    //   slv_reg6 <= slv_reg6;
 	                      slv_reg7 <= slv_reg7;
 	                    end
 	        endcase
 		end else begin
 			start_generate_frames <= FALSE;
+			if (software_rst_reg_sync) software_rst_reg <= FALSE;  /* latency = 1 */
 		end
 	  end
 	end    
@@ -511,10 +522,18 @@
 
 	// Add user logic here
 
+	always @(posedge S_AXI_ACLK) begin
+		if (!S_AXI_ARESETN) begin
+			software_rst_reg_sync <= FALSE;
+		end else begin
+			software_rst_reg_sync <= software_rst_reg;
+		end
+	end
+
 	/* Sampling parameters sync */
 
 	always @(posedge S_AXI_ACLK) begin
-		if (!S_AXI_ARESETN) begin
+		if (!S_AXI_ARESETN || software_rst_reg) begin
 			sampling_clk_increment_reg <= DEFAULT_SAMPLING_CLK_INCREMENT;
 	      	sampling_points_reg <= DEFAULT_SAMPLING_POINTS;
 	      	sampling_frames_reg <= DEFAULT_SAMPLING_FRAMES;
@@ -534,7 +553,7 @@
 	/* Flags */
 
 	always @(posedge S_AXI_ACLK) begin
-		if (!S_AXI_ARESETN) begin
+		if (!S_AXI_ARESETN || software_rst_reg) begin
 			frame_state <= FRAME_STATE__IDLE;
 		end else begin
 			case (frame_state)
@@ -544,18 +563,20 @@
 						sampling_points_reg > 0 && 
 						sampling_clk_increment_reg >= MINIUM_SAMPLING_CLK_INCREMENT && 
 						adc_module_ready) begin
+
 						if (start_generate_frames) begin
 							frame_state <= FRAME_STATE__MAKE_TRIGGER;
 						end else begin
 							frame_state <= FRAME_STATE__IDLE;
 						end
+
 					end else begin
 						frame_state <= FRAME_STATE__IDLE;
 					end
 				end
 
 				FRAME_STATE__MAKE_TRIGGER: begin
-					if (frame_have_triggered) frame_state <= FRAME_STATE__WAIT_FRAME_START;
+					if (sampling_trigger_control == LOW && adc_module_ready) frame_state <= FRAME_STATE__WAIT_FRAME_START;
 					else frame_state <= FRAME_STATE__MAKE_TRIGGER;
 				end
 
@@ -585,10 +606,9 @@
 	/* Registers */
 
 	always @(posedge S_AXI_ACLK) begin
-		if (!S_AXI_ARESETN) begin
+		if (!S_AXI_ARESETN || software_rst_reg) begin
 
 			generated_frames_count <= 0;
-			frame_have_triggered <= FALSE;
 			sampling_trigger_control <= LOW;
 			slv_reg3 <= 0;
 			last_frame_reg <= FALSE;
@@ -599,14 +619,20 @@
 
 				FRAME_STATE__IDLE: begin
 					generated_frames_count <= 0;
-					frame_have_triggered <= FALSE;
 					sampling_trigger_control <= LOW;
 					last_frame_reg <= FALSE;
 
 					if (sampling_frames_reg > 0 && 
 						sampling_points_reg > 0 && 
 						sampling_clk_increment_reg >= MINIUM_SAMPLING_CLK_INCREMENT && 
-						adc_module_ready) slv_reg3[0] <= TRUE;
+						adc_module_ready)
+
+						if (start_generate_frames) begin  /* trigger condition */
+						  	slv_reg3[0] <= FALSE;
+						end else begin
+							slv_reg3[0] <= TRUE;
+						end
+
 					else slv_reg3[0] <= FALSE;
 
 				end
@@ -614,26 +640,28 @@
 				FRAME_STATE__MAKE_TRIGGER: begin
 					slv_reg3[0] <= FALSE;
 					if (adc_module_ready) begin
-						if (sampling_trigger_control == HIGH) begin
-							sampling_trigger_control <= LOW;
-							frame_have_triggered <= FALSE;
-						end else begin
-							sampling_trigger_control <= HIGH;  // make a rising edge
-							frame_have_triggered <= TRUE;
+
+						if (sampling_trigger_control == LOW) begin  /* LOW */
+							sampling_trigger_control <= HIGH;  /* rising edge */
 							if (generated_frames_count >= sampling_frames_reg - 1) begin
 								last_frame_reg <= TRUE;
 							end else begin
 								last_frame_reg <= FALSE;
 							end
+						end else begin
+							sampling_trigger_control <= LOW;
 						end
+							
 					end
 				end
 
 				FRAME_STATE__WAIT_FRAME_START: begin
 					slv_reg3[0] <= FALSE;
+					sampling_trigger_control <= HIGH;
 				end
 
 				FRAME_STATE__WAIT_FRAME_END: begin
+					sampling_trigger_control <= LOW;  // change to low
 					if (adc_module_ready) begin
 						generated_frames_count <= generated_frames_count + 1;
 						if (generated_frames_count >= sampling_frames_reg - 1) begin
@@ -648,7 +676,6 @@
 
 				default: begin
 					generated_frames_count <= 0;
-					frame_have_triggered <= FALSE;
 					sampling_trigger_control <= LOW;
 					slv_reg3[0] <= FALSE;
 					last_frame_reg <= FALSE;
