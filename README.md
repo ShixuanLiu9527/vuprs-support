@@ -1,5 +1,5 @@
 # **VUPRS Software Support Repository**
-# 车下故障诊断与定位系统高速数据处理模块软件支持仓库
+# 车下故障定位与识别系统-高速数据处理模块软件支持仓库
   
 <img src="images/board.png" alt="PCB" style="width:1000px; height:auto;" />  
 <img src="images/real-board.jpg" alt="PCB" style="width:1000px; height:auto;" />  
@@ -8,7 +8,7 @@
 
 [编程手册](./doc/UserGuide.md)  
 [电路原理图](./doc/VUPRS-Schematic.pdf)  
-[板端服务器代码仓库: vuprs-server](https://github.com/ShixuanLiu9527/vuprs-server.git)
+[板端服务器代码仓库: vuprs-server](https://github.com/ShixuanLiu9527/vuprs-server.git)  
 
 ## 1. 模块硬件资源
 
@@ -179,7 +179,7 @@
 
 例如:  
 
-    ifconfig eth0 192.168.1.100 netmask 255.255.0.0 up
+    ifconfig eth0 169.254.100.138 netmask 255.255.0.0 up
 
 完成后验证板子和主机是否可以 `ping` 通, 如果主机与板子在同一子网但是无法 `ping` 通, 可以检查主机防火墙等设置.  
 **Step 3**: 在主机侧打开监听程序:  
@@ -192,7 +192,7 @@
 
 例如:  
 
-    iperf3 -c 192.168.1.200 -t 600 -i 10
+    iperf3 -c 169.254.100.138 -t 600 -i 10
 
 代表测试 `600` 秒, 每隔 `10` 秒打印一次测试结果.  
 当前以太网接口的实测读写速度如下:  
