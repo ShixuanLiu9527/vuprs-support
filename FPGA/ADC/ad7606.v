@@ -1,6 +1,6 @@
 /**
  *
- * Author:            Shixuan Liu, Tongji University 1
+ * Author:            Shixuan Liu, Tongji University
  * Brief:             Controller for VUPRS-AD7606 Chip
  * Date:              2025-8
  *

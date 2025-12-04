@@ -7,7 +7,8 @@
 ## 文档链接
 
 [编程手册](./doc/UserGuide.md)  
-[电路原理图](./doc/VUPRS-Schematic.pdf)  
+[电路原理图-高速数据处理模块](./doc/VUPRS-Schematic.pdf)  
+[电路原理图-麦克风阵列模块](./doc/VUPRS-Mic-Array.pdf)  
 [板端服务器代码仓库: vuprs-server](https://github.com/ShixuanLiu9527/vuprs-server.git)  
 
 ## 1. 模块硬件资源
