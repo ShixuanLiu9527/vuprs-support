@@ -512,7 +512,7 @@
 	    begin    
 	      // When there is a valid read address (S_AXI_ARVALID) with 
 	      // acceptance of read address by the slave (axi_arready), 
-	      // output the read dada 
+	      // output the read dada
 	      if (slv_reg_rden)
 	        begin
 	          axi_rdata <= reg_data_out;     // register read data
