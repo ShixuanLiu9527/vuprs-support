@@ -41,8 +41,8 @@
 ## 文档链接
 
 [[ 电路原理图 - 异构高速数据处理模块 ]](./doc/VUPRS-Schematic.pdf)  
+[[ PCB 图纸 - 异构高速数据处理模块 ]](./doc/VUPRS-PCB.pdf)  
 [[ 电路原理图 - 麦克风阵列模块 ]](./doc/VUPRS-Mic-Array.pdf)  
-[[ PCB 图纸 ]](./doc/VUPRS-PCB.pdf)  
 
 ## 1. 模块硬件资源
 
