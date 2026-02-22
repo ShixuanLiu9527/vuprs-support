@@ -229,8 +229,17 @@
 代表测试 `600` 秒, 每隔 `10` 秒打印一次测试结果.  
 当前以太网接口的实测读写速度如下:  
 
-    Slave to Master: 700 MB/s
-    Master to Slave: 300 MB/s
+    Slave to Master: 970 Mbps
+    Master to Slave: 970 Mbps
+
+<div style="display: flex; justify-content: center; gap: 20px;">
+    <div style="flex: 1; text-align: center;">
+        <img src="images/ethernet_h2c.png" alt="PCB" style="height: 300px; width: auto;" />
+    </div>
+    <div style="flex: 1; text-align: center;">
+        <img src="images/ethernet_c2h.png" alt="PCB" style="height: 300px; width: auto;" />
+    </div>
+</div>
 
 ### 6. 连接 `WIFI`
 
