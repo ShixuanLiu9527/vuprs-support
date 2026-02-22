@@ -232,14 +232,10 @@
     Slave to Master: 970 Mbps
     Master to Slave: 970 Mbps
 
-<div style="display: flex; justify-content: center; gap: 20px;">
-    <div style="flex: 1; text-align: center;">
-        <img src="images/ethernet_h2c.png" alt="PCB" style="height: 300px; width: auto;" />
-    </div>
-    <div style="flex: 1; text-align: center;">
-        <img src="images/ethernet_c2h.png" alt="PCB" style="height: 300px; width: auto;" />
-    </div>
-</div>
+<p align="center">
+  <img src="images/ethernet_h2c.png" alt="PCB" width="45%" />
+  <img src="images/ethernet_c2h.png" alt="PCB" width="45%" /> 
+</p>
 
 ### 6. 连接 `WIFI`
 
