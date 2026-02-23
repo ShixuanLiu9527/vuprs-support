@@ -1,8 +1,19 @@
-# **VUPRS Software Support Repository**
-# 车下故障定位与识别系统-高速数据处理模块软件支持仓库
+# **Vehicle-Under Fault Positioning and Recognition System**
+# 高速列车车下声学故障定位与识别系统
 
-本仓库是车下异响故障识别与定位系统 `(Vehicle-Under Fault Positioning and Recognition System, VUPRS)` 的软硬件研发仓库, 主要用于管理相关依赖和代码.  
+本仓库是车下异响故障识别与定位系统 `(Vehicle-Under Fault Positioning and Recognition System, VUPRS)` 项目主页, 主要用于管理相关依赖和代码.  
   
+## 主要代码仓库链接
+
+[[ Linux 板端服务器代码仓库: vuprs-server ]](https://github.com/ShixuanLiu9527/vuprs-server.git)  
+[[ FPGA 代码仓库: vuprs-fpga ]](https://github.com/ShixuanLiu9527/vuprs-fpga.git)  
+  
+## 文档链接
+
+[[ 电路原理图 - 异构高速数据处理模块 ]](./doc/VUPRS-Schematic.pdf)  
+[[ PCB 图纸 - 异构高速数据处理模块 ]](./doc/VUPRS-PCB.pdf)  
+[[ 电路原理图 - 麦克风阵列模块 ]](./doc/VUPRS-Mic-Array.pdf)  
+
 ## 硬件实物
 
 <div align="center">
@@ -32,17 +43,6 @@
 <div align="center">
     <img src="images/arm_fpga_structure.png" alt="PCB" style="width:600px; height:auto;" />  
 </div>
-
-## 主要代码仓库链接
-
-[[ ARM Linux 板端服务器代码仓库: vuprs-server ]](https://github.com/ShixuanLiu9527/vuprs-server.git)  
-[[ FPGA 代码仓库: vuprs-fpga ]](https://github.com/ShixuanLiu9527/vuprs-fpga.git)  
-  
-## 文档链接
-
-[[ 电路原理图 - 异构高速数据处理模块 ]](./doc/VUPRS-Schematic.pdf)  
-[[ PCB 图纸 - 异构高速数据处理模块 ]](./doc/VUPRS-PCB.pdf)  
-[[ 电路原理图 - 麦克风阵列模块 ]](./doc/VUPRS-Mic-Array.pdf)  
 
 ## 1. 模块硬件资源
 
