@@ -8,7 +8,7 @@
 [[ Linux 板端服务器代码仓库: vuprs-server ]](https://github.com/ShixuanLiu9527/vuprs-server.git)  
 [[ FPGA 代码仓库: vuprs-fpga ]](https://github.com/ShixuanLiu9527/vuprs-fpga.git)  
   
-## 文档链接
+## 硬件设计文档
 
 [[ 电路原理图 - 异构高速数据处理模块 ]](./doc/VUPRS-Schematic.pdf)  
 [[ PCB 图纸 - 异构高速数据处理模块 ]](./doc/VUPRS-PCB.pdf)  
