@@ -1,7 +1,7 @@
 
 `timescale 1 ns / 1 ps
 
-	module vuprs_adc_controller_v2_0 #
+	module vadc_v1_0 #
 	(
 		// Users to add parameters here
 
@@ -29,7 +29,10 @@
 
 		// Parameters of Axi Master Bus Interface M00_AXIS
 		parameter integer C_M00_AXIS_TDATA_WIDTH	= 32,
-		parameter integer C_M00_AXIS_START_COUNT	= 32
+		parameter integer C_M00_AXIS_START_COUNT	= 32,
+
+		parameter [31: 0] FRAME_HEADER           = 32'h0000_FFF0,
+		parameter [31: 0] FRAME_TAILER           = 32'h0000_FF0F
 	)
 	(
 		// Users to add ports here
@@ -104,25 +107,18 @@
 		output wire [(C_M00_AXIS_TDATA_WIDTH/8)-1 : 0] m00_axis_tkeep,
 		output wire  m00_axis_tlast,
 		input wire  m00_axis_tready,
-		
-		// DEBUG_PORTS
 
-		/* S_AXI */
-		
-		output wire [2: 0] DEBUG_frame_state,
+		/* DEBUG */
 
-		/* M_AXIS */
+		output wire [2:0] DEBUG_frame_state,
 
-		output wire [1: 0] DEBUG_mst_exec_state,
-		output wire [7: 0] DEBUG_buffer_pointer,
-		output wire [32: 0] DEBUG_data_send_count,
-		output wire DEBUG_fifo_rd_en,
+		output wire [7:0] DEBUG_fifo_pushed_number,
+		output wire [3:0] DEBUG_mst_exec_state,
+		output wire [2:0] DEBUG_fifo_write_state,
 
-		output wire [2: 0] DEBUG_fifo_write_state,
-		output wire [7: 0] DEBUG_crc_calculated_channels,
-		output wire [7: 0] DEBUG_fifo_pushed_number,
-		output wire DEBUG_fifo_write_en,
-		output wire [31: 0] DEBUG_current_fifo_write_data
+		output wire DEBUG_fifo_full,
+		output wire DEBUG_fifo_almost_full,
+		output wire DEBUG_fifo_reset
 	);
 
 	wire ready;
@@ -132,14 +128,15 @@
 	wire one_frame_sampling_trigger;
 	wire last_frame;
 	wire software_rst;
+	wire continuous_sampling;
 
 // Instantiation of Axi Bus Interface S00_AXI
-	vuprs_adc_controller_v2_0_S00_AXI # (
+	vadc_v1_0_S00_AXI # (
 		.C_S_AXI_DATA_WIDTH(C_S00_AXI_DATA_WIDTH),
 		.C_S_AXI_ADDR_WIDTH(C_S00_AXI_ADDR_WIDTH),
 		
 		.USR_CLK_CYCLE_NS(USR_CLK_CYCLE_NS)
-	) vuprs_adc_controller_v2_0_S00_AXI_inst (
+	) vadc_v1_0_S00_AXI_inst (
 
 		/* Internal Connection */
 
@@ -150,6 +147,7 @@
 		.one_frame_sampling_trigger(one_frame_sampling_trigger),
 		.last_frame(last_frame),
 		.software_rst(software_rst),
+		.continuous_sampling(continuous_sampling),
 
 		.adc_card_present_detect(adc_card_present_detect),
 		.fpga_sampling_led(fpga_sampling_led),
@@ -178,14 +176,14 @@
 		.S_AXI_RRESP(s00_axi_rresp),
 		.S_AXI_RVALID(s00_axi_rvalid),
 		.S_AXI_RREADY(s00_axi_rready),
-		
+
 		/* DEBUG */
-		
+
 		.DEBUG_frame_state(DEBUG_frame_state)
 	);
 
 // Instantiation of Axi Bus Interface M00_AXIS
-	vuprs_adc_controller_v2_0_M00_AXIS # ( 
+	vadc_v1_0_M00_AXIS # (
 
 		.C_M_AXIS_TDATA_WIDTH(C_M00_AXIS_TDATA_WIDTH),
 		.C_M_START_COUNT(C_M00_AXIS_START_COUNT),
@@ -204,9 +202,12 @@
         .T15_NS(T15_NS),                      /* unit: ns, t15 of AD7606 (refer to data sheet) */
         .T26_NS(T26_NS),                      /* unit: ns, t15 of AD7606 (refer to data sheet) */
 
-		.CONTROL_REGISTER_WIDTH(C_S00_AXI_DATA_WIDTH) // internal connection
+		.CONTROL_REGISTER_WIDTH(C_S00_AXI_DATA_WIDTH), // internal connection
 
-	) vuprs_adc_controller_v2_0_M00_AXIS_inst (
+		.FRAME_HEADER(FRAME_HEADER),
+		.FRAME_TAILER(FRAME_TAILER)
+
+	) vadc_v1_0_M00_AXIS_inst (
 
 		/* Internal Connection */
 
@@ -217,6 +218,7 @@
 		.ready(ready),
 		.last_frame(last_frame),
 		.software_rst(software_rst),
+		.continuous_sampling(continuous_sampling),
 
 		/* ADC Hardware Pins */
 
@@ -257,19 +259,16 @@
 		.M_AXIS_TSTRB(m00_axis_tstrb),
 		.M_AXIS_TLAST(m00_axis_tlast),
 		.M_AXIS_TREADY(m00_axis_tready),
-		
-		/* DEBUG */
-		
-		.DEBUG_mst_exec_state(DEBUG_mst_exec_state),
-		.DEBUG_buffer_pointer(DEBUG_buffer_pointer),
-		.DEBUG_data_send_count(DEBUG_data_send_count),
-		.DEBUG_fifo_rd_en(DEBUG_fifo_rd_en),
 
-		.DEBUG_fifo_write_state(DEBUG_fifo_write_state),
-		.DEBUG_crc_calculated_channels(DEBUG_crc_calculated_channels),
+		/* DEBUG */
+
 		.DEBUG_fifo_pushed_number(DEBUG_fifo_pushed_number),
-		.DEBUG_fifo_write_en(DEBUG_fifo_write_en),
-		.DEBUG_current_fifo_write_data(DEBUG_current_fifo_write_data)
+		.DEBUG_mst_exec_state(DEBUG_mst_exec_state),
+		.DEBUG_fifo_write_state(DEBUG_fifo_write_state),
+
+		.DEBUG_fifo_full(DEBUG_fifo_full),
+		.DEBUG_fifo_almost_full(DEBUG_fifo_almost_full),
+		.DEBUG_fifo_reset(DEBUG_fifo_reset)
 	);
 
 	// Add user logic here

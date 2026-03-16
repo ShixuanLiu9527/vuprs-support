@@ -31,7 +31,7 @@ EXTRA_CFLAGS := -I$(topdir)/include $(XVC_FLAGS)
 
 $(TARGET_MODULE)-objs := libxdma.o xdma_cdev.o cdev_ctrl.o cdev_events.o cdev_sgdma.o cdev_xvc.o cdev_bypass.o xdma_mod.o xdma_thread.o
 obj-m := $(TARGET_MODULE).o
-BUILDSYSTEM_DIR:=/home/lsx/source/linux/rk356x_linux/kernel
+BUILDSYSTEM_DIR:=/home/lsx/source/linux/rk356x_linux/kernel  # Linux kernel path
 PWD:=$(shell pwd)
 
 all :

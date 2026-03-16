@@ -1,7 +1,7 @@
 
 `timescale 1 ns / 1 ps
 
-	module vuprs_adc_controller_v2_0_S00_AXI #
+	module vadc_v1_0_S00_AXI #
 	(
 		// Users to add parameters here
 
@@ -28,10 +28,14 @@
 		output wire one_frame_sampling_trigger,                 /* sampling trigger */
 		output wire last_frame,                                 /* indicate this is the last frame */
 		output wire software_rst,
+		output wire continuous_sampling,                        /* indicate this is the interminable sampling */
+
 		output wire fpga_sampling_led,
 		output wire fpga_adc_card_present_led,
 		
-		output wire [2: 0] DEBUG_frame_state,
+		/* DEBUG */
+
+		output wire [2:0] DEBUG_frame_state,
 
 		// User ports ends
 		// Do not modify the ports beyond this line
@@ -145,7 +149,7 @@
 	reg [C_S_AXI_DATA_WIDTH-1:0]	slv_reg4;   // Number of Generated Frames (R)
 	reg [C_S_AXI_DATA_WIDTH-1:0]	slv_reg5;   // ADC Error Flag             (R)
 	reg [C_S_AXI_DATA_WIDTH-1:0]	slv_reg6;   // Software reset             (R/W)
-	reg [C_S_AXI_DATA_WIDTH-1:0]	slv_reg7;
+	reg [C_S_AXI_DATA_WIDTH-1:0]	slv_reg7;   // Continuous Sampling        (R/W)
 	wire	 slv_reg_rden;
 	wire	 slv_reg_wren;
 	reg [C_S_AXI_DATA_WIDTH-1:0]	 reg_data_out;
@@ -173,7 +177,11 @@
     reg [C_S_AXI_DATA_WIDTH-1 : 0] sampling_points_reg = DEFAULT_SAMPLING_POINTS;         /* sampling points */
 	reg [C_S_AXI_DATA_WIDTH-1 : 0] sampling_frames_reg = DEFAULT_SAMPLING_FRAMES;  /* sampling frames */
 
+	reg continuous_sampling_reg = FALSE;
+
 	reg start_generate_frames = FALSE;
+	reg start_generate_frames_sync = FALSE;
+
 	reg software_rst_reg = FALSE;
 	reg software_rst_reg_sync = FALSE;
 
@@ -190,6 +198,8 @@
 	assign sampling_clk_increment = sampling_clk_increment_reg;
 	assign sampling_points = sampling_points_reg;
 	assign last_frame = last_frame_reg;
+	assign continuous_sampling = continuous_sampling_reg;
+
 	assign software_rst = software_rst_reg;
 	
 	assign DEBUG_frame_state = frame_state;
@@ -299,7 +309,7 @@
 	    //   slv_reg4 <= 0;
 	    //   slv_reg5 <= 0;
 	    //   slv_reg6 <= 0;
-	      slv_reg7 <= 0;
+	      slv_reg7 <= FALSE;
 		  start_generate_frames <= FALSE;
 		  software_rst_reg <= FALSE;
 	    end 
@@ -381,8 +391,8 @@
 	                    end
 	        endcase
 		end else begin
-			start_generate_frames <= FALSE;
 			if (software_rst_reg_sync) software_rst_reg <= FALSE;  /* latency = 1 */
+			if (start_generate_frames_sync) start_generate_frames <= FALSE;
 		end
 	  end
 	end    
@@ -525,8 +535,10 @@
 	always @(posedge S_AXI_ACLK) begin
 		if (!S_AXI_ARESETN) begin
 			software_rst_reg_sync <= FALSE;
+			start_generate_frames_sync <= FALSE;
 		end else begin
 			software_rst_reg_sync <= software_rst_reg;
+			start_generate_frames_sync <= start_generate_frames;
 		end
 	end
 
@@ -537,6 +549,7 @@
 			sampling_clk_increment_reg <= DEFAULT_SAMPLING_CLK_INCREMENT;
 	      	sampling_points_reg <= DEFAULT_SAMPLING_POINTS;
 	      	sampling_frames_reg <= DEFAULT_SAMPLING_FRAMES;
+			continuous_sampling_reg <= FALSE;
 			slv_reg4 <= 0;
 			slv_reg5 <= 0;
 		end else begin
@@ -544,6 +557,9 @@
 				if (slv_reg0 >= MINIUM_SAMPLING_CLK_INCREMENT) sampling_clk_increment_reg <= slv_reg0;
 				if (slv_reg1 > 0) sampling_points_reg <= slv_reg1;
 				if (slv_reg2 > 0) sampling_frames_reg <= slv_reg2;
+
+				if (slv_reg7 > 0) continuous_sampling_reg <= TRUE;
+				else continuous_sampling_reg <= FALSE;
 			end
 			slv_reg4 <= generated_frames_count;
 			slv_reg5 <= adc_module_error_flag;
@@ -559,8 +575,7 @@
 			case (frame_state)
 
 				FRAME_STATE__IDLE: begin
-					if (sampling_frames_reg > 0 && 
-						sampling_points_reg > 0 && 
+					if (((sampling_frames_reg > 0 && sampling_points_reg > 0) || continuous_sampling_reg) && 
 						sampling_clk_increment_reg >= MINIUM_SAMPLING_CLK_INCREMENT && 
 						adc_module_ready) begin
 
@@ -622,8 +637,7 @@
 					sampling_trigger_control <= LOW;
 					last_frame_reg <= FALSE;
 
-					if (sampling_frames_reg > 0 && 
-						sampling_points_reg > 0 && 
+					if (((sampling_frames_reg > 0 && sampling_points_reg > 0) || continuous_sampling_reg) && 
 						sampling_clk_increment_reg >= MINIUM_SAMPLING_CLK_INCREMENT && 
 						adc_module_ready)
 
@@ -642,12 +656,19 @@
 					if (adc_module_ready) begin
 
 						if (sampling_trigger_control == LOW) begin  /* LOW */
+
 							sampling_trigger_control <= HIGH;  /* rising edge */
-							if (generated_frames_count >= sampling_frames_reg - 1) begin
-								last_frame_reg <= TRUE;
-							end else begin
+							
+							if (continuous_sampling_reg) begin
 								last_frame_reg <= FALSE;
+							end else begin
+								if (generated_frames_count >= sampling_frames_reg - 1) begin
+									last_frame_reg <= TRUE;
+								end else begin
+									last_frame_reg <= FALSE;
+								end
 							end
+							
 						end else begin
 							sampling_trigger_control <= LOW;
 						end
