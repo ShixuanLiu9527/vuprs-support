@@ -32,10 +32,30 @@
     <img src="images/fpga_structure.png" alt="PCB" style="width:1000px; height:auto;" />  
 </div>
 
-### 时域宽带 FIR 波束形成器
+### 硬件波束形成链路
 
 <div align="center">
-    <img src="images/fir_bf.png" alt="PCB" style="width:1000px; height:auto;" />  
+    <img src="images/fir_bf.png" alt="PCB" style="width:1000px; height:auto;" />
+    <br/>
+    <em>硬件波束形成器总览</em>
+</div>
+
+<div align="center">
+    <img src="images/predelay.png" alt="PCB" style="width:1000px; height:auto;" />
+    <br/>
+    <em>Pre-delay Unit</em>
+</div>
+
+<div align="center">
+    <img src="images/fir.png" alt="PCB" style="width:1000px; height:auto;" />
+    <br/>
+    <em>FIR Filter Bank</em>
+</div>
+
+<div align="center">
+    <img src="./images/fir-pipeline.png" alt="PCB" style="width:1000px; height:auto;" />
+    <br/>
+    <em>FIR pipeline</em>
 </div>
 
 ### FPGA-ARM 协作波束形成架构
