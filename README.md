@@ -1,13 +1,72 @@
-# **Vehicle-Under Fault Positioning and Recognition System**
-# 高速列车车下声学故障定位与识别系统
+# VUPRS — 高速列车车下声学波束形成故障定位与识别系统
+### Vehicle-Under Fault Positioning and Recognition System
 
-本仓库是车下异响故障识别与定位系统 `(Vehicle-Under Fault Positioning and Recognition System, VUPRS)` 项目主页, 主要用于管理相关依赖和代码.  
-  
+<div align="center">
+
+![Platform](https://img.shields.io/badge/Platform-Linux%20%2F%20ARM64%20(RK3568)-brightgreen)
+![FPGA](https://img.shields.io/badge/FPGA-Artix--7%20XC7A100T-orange)
+![NPU](https://img.shields.io/badge/Inference-RKNN%20NPU-purple)
+![Interface](https://img.shields.io/badge/Interface-PCIe%202.0%20XDMA-blueviolet)
+
+</div>
+
+本仓库是车下异响故障识别与定位系统的项目主页, 用于管理硬件设计文档, 板卡使用手册与 FPGA 工程辅助资源.
+
+## 目录
+
+- [项目简介](#项目简介)
+- [系统架构](#系统架构)
+- [主要代码仓库链接](#主要代码仓库链接)
+- [硬件设计文档](#硬件设计文档)
+- [硬件实物](#硬件实物)
+- [主要算法框图](#主要算法框图)
+- [模块硬件资源](#1-模块硬件资源)
+- [RK3568 侧使用手册](#2-rk3568-侧使用手册)
+- [FPGA 侧使用手册](#3-fpga-侧使用手册)
+
+## 项目简介
+
+`VUPRS (Vehicle-Under Fault Positioning and Recognition System)` 是一套部署于高速列车车下的声学故障定位与识别系统, 通过**麦克风阵列**拾取车下声学信号, 结合 **FPGA 硬件波束形成**与 **ARM 端神经网络推理**, 实现对车下异响故障目标的实时定位与自动识别.
+
+整个系统由异构高速数据处理模块 (`RK3568` + `XC7A100T` FPGA) 与麦克风阵列模块组成, 两者通过 `PCIe x8` 排线连接; 软件侧由运行于 `RK3568` 的服务器端程序统一管理采集, 处理与对外服务.
+
+**系统亮点:**
+
+- **异构硬件**: `RK3568` (ARM64 主控) + `XC7A100T` (Artix-7 FPGA) + `AD760BSTZ` 双通道 ADC, 支持 `16` 路模拟信号输入
+- **声学定位**: FPGA 硬件波束形成 (Beam Forming) 与 FIR 滤波器组, 并支持 FPGA-ARM 混合波束形成架构
+- **故障识别**: 特征提取 + `RKNN` NPU 推理 + 后处理, 自动识别车下声学故障目标
+- **高速互联**: FPGA 与 ARM 之间通过 `PCIe 2.0` `XDMA` 通信, 实测读写带宽 `810 / 710 MB/s`
+- **网络服务**: 以太网 `TCP` 服务器, 对外提供命令流与控制流服务 (详见 [网络通信协议](https://github.com/ShixuanLiu9527/vuprs-server/blob/main/docs/protocol_cmd.md))
+
+## 系统架构
+
+```mermaid
+flowchart LR
+    A["麦克风阵列模块<br>(16 路模拟信号)"] -->|"PCIe x8 排线<br>模拟信号输入"| B["FPGA XC7A100T<br>数据采集 · 波束形成 · FIR 滤波"]
+    B -->|"PCIe 2.0 x2 XDMA<br>实测 810 / 710 MB/s"| C["RK3568 ARM64<br>信号处理 · RKNN NPU 推理<br>TCP 服务器 · FPGA-Tool"]
+    C -->|"以太网 TCP<br>实测 970 Mbps"| D["上位机 / 客户端"]
+```
+
+- **FPGA 侧** ([vuprs-fpga](https://github.com/ShixuanLiu9527/vuprs-fpga.git)): 负责多通道数据采集与硬件波束形成链路, 降低 ARM 侧实时计算压力;
+- **ARM 侧** ([vuprs-server](https://github.com/ShixuanLiu9527/vuprs-server.git)): 通过 `XDMA` 驱动与 FPGA 高速交互 (`AXI-Lite` 寄存器读写 / `AXI-Stream` 数据流传输), 完成波束形成, `FIR` 滤波 (基于 `FFTW3` 加速), 故障检测 (特征提取 + `RKNN` NPU 推理 + 后处理), 并通过以太网 `TCP` 服务器对外提供命令与数据服务, 同时提供 `FPGA-Tool` 终端调试工具.
+
 ## 主要代码仓库链接
 
-[[ Linux 板端服务器代码仓库: vuprs-server ]](https://github.com/ShixuanLiu9527/vuprs-server.git)  
-[[ FPGA 代码仓库: vuprs-fpga ]](https://github.com/ShixuanLiu9527/vuprs-fpga.git)  
-  
+| 仓库 | 职责 | 运行平台 |
+| :--- | :--- | :--- |
+| [vuprs-support](https://github.com/ShixuanLiu9527/vuprs-support.git) | 项目主页: 硬件设计文档, 板卡使用手册, FPGA 工程辅助资源, 预编译产物 | —— |
+| [vuprs-server](https://github.com/ShixuanLiu9527/vuprs-server.git) | Linux 服务器端软件 (采集控制, 信号处理, 故障识别, TCP 服务) | `RK3568` (`ARM64`) |
+| [vuprs-fpga](https://github.com/ShixuanLiu9527/vuprs-fpga.git) | FPGA 工程与逻辑设计 (波束形成, FIR 滤波器组等) | `XC7A100T` (Artix-7) |
+
+**本仓库内容结构:**
+
+| 路径 | 内容 |
+| :--- | :--- |
+| [doc/](./doc/) | 硬件设计文档: 电路原理图, PCB 图纸, 麦克风阵列图纸 (PDF) |
+| [images/](./images/) | 板卡实物照片与算法框图素材 |
+| [fpga-support/](./fpga-support/) | FPGA 工程辅助资源: 约束文件, DDR 配置, 调试工具 |
+| [bin/](./bin/) | 预编译产物 (`fpga-mcs`, `server`) |
+
 ## 硬件设计文档
 
 [[ 电路原理图 - 异构高速数据处理模块 ]](./doc/VUPRS-Schematic.pdf)  
@@ -17,11 +76,15 @@
 ## 硬件实物
 
 <div align="center">
-    <img src="images/board.png" alt="PCB" style="width:1000px; height:auto;" />  
+    <img src="images/board.png" alt="异构高速数据处理模块 PCB" style="width:1000px; height:auto;" />
+    <br/>
+    <em>异构高速数据处理模块 PCB</em>
 </div>
 
 <div align="center">
-    <img src="images/real-board.jpg" alt="PCB" style="width:1000px; height:auto;" />  
+    <img src="images/real-board.jpg" alt="系统实物图" style="width:1000px; height:auto;" />
+    <br/>
+    <em>系统硬件实物</em>
 </div>
 
 ## 主要算法框图
@@ -29,31 +92,31 @@
 ### FPGA 系统架构
 
 <div align="center">
-    <img src="images/fpga_structure.png" alt="PCB" style="width:1000px; height:auto;" />  
+    <img src="images/fpga_structure.png" alt="FPGA 系统架构" style="width:1000px; height:auto;" />
 </div>
 
 ### 硬件波束形成链路
 
 <div align="center">
-    <img src="images/fir_bf.png" alt="PCB" style="width:1000px; height:auto;" />
+    <img src="images/fir_bf.png" alt="硬件波束形成器总览" style="width:1000px; height:auto;" />
     <br/>
     <em>硬件波束形成器总览</em>
 </div>
 
 <div align="center">
-    <img src="images/predelay.png" alt="PCB" style="width:1000px; height:auto;" />
+    <img src="images/predelay.png" alt="Pre-delay Unit" style="width:1000px; height:auto;" />
     <br/>
     <em>Pre-delay Unit</em>
 </div>
 
 <div align="center">
-    <img src="images/fir.png" alt="PCB" style="width:1000px; height:auto;" />
+    <img src="images/fir.png" alt="FIR Filter Bank" style="width:1000px; height:auto;" />
     <br/>
     <em>FIR Filter Bank</em>
 </div>
 
 <div align="center">
-    <img src="./images/fir-pipeline.png" alt="PCB" style="width:1000px; height:auto;" />
+    <img src="./images/fir-pipeline.png" alt="FIR pipeline" style="width:1000px; height:auto;" />
     <br/>
     <em>FIR pipeline</em>
 </div>
@@ -61,7 +124,7 @@
 ### FPGA-ARM 协作波束形成架构
 
 <div align="center">
-    <img src="images/arm_fpga_structure.png" alt="PCB" style="width:600px; height:auto;" />  
+    <img src="images/arm_fpga_structure.png" alt="FPGA-ARM 协作波束形成架构" style="width:600px; height:auto;" />
 </div>
 
 ## 1. 模块硬件资源
@@ -162,7 +225,7 @@
 | `A47`-`B47` | `AGND` | --- | 模拟信号地 |
 | `A48`-`B48` | `DGND` | --- | 数字信号地, 不可用于模拟系统 |
 | `A49`-`B49` | `Card PRSNT#` | `I` | 麦克风阵列插入检测引脚, 低电平有效 |
- 
+
 **接口注意事项**  
 
 1. `A49`-`B49` 是麦克风阵列插入检测引脚, 当麦克风阵列信号插入 `PCIe` 接口时, 该引脚会被拉低, 表示 "已经插入", 同时板子上靠近接口的白色 `LED` 会点亮.  
@@ -190,10 +253,10 @@
 ### 2.3 `DDR` 眼图测试
 
 `U-Boot` 中集成了 `Rockchip` 眼图测试工具, 在正确烧录固件后, 请按照以下方式使用这个工具:  
-  
+
 **Step 1**: 板子进系统后, 按住键盘 `Ctrl+C` 组合键不放, 然后按下板子上的 `ARM-RESET` 按键, 此时板子会重启, 等待板子重启并停留在 `U-Boot` 界面, 当板子打印 `<INTERRUPT>` 时松开 `Ctrl+C` 组合键, 此时板子已经停留在 `U-Boot`;  
 **Step 2**: 在 `U-Boot` 中, 运行 `ddr_dq_eye` 指令, 此时 `RK3568` 会在 `DDR` 的最高频率下测试信号眼图, 并输出结果.  
-  
+
 当前 `DDR` 眼图测试结果如下:  
 
 | `DDR` 频率 | 最小读取眼宽 | 最小写入眼宽 | 此频率下 `Rockchip` 官方规定的最小眼宽 |
@@ -205,17 +268,17 @@
 
 与 `FPGA` 通信的 `PCIe` 接口使用的是 `Xilinx XDMA`, 截止到 `2025` 年 `8` 月, `XDMA` 的驱动仍然只支持 `x86-64 bit` 架构的 `CPU`, 因此官方驱动不能直接用于本项目.  
 为了在 `RK3568` 上使用 `XDMA`, 这里使用了有关开发者修改后的 `XDMA` 驱动, 其中主要修改了 `long` 等数据类型并增加了一些程序补丁, 使该驱动在 `ARM` 架构下读写与 `x86` 架构下读写结果相同. 驱动来源:  
-  
+
 [Saturn](https://github.com/laurencebarker/Saturn.git)
-  
+
 进入 `linuxdriver` 目录即可看到驱动源码.  
 拿到驱动后, 在虚拟机下修改 `tools/Makefile` 和 `xdma/Makefile`, 指定 `Linux` 内核源码路径和架构, 交叉编译器等即可 `make` 编译.  
 将编译好的驱动拉到板子里, 运行 `tests/.load_driver.sh` 挂载驱动 (请确认 `RK3568` 的设备树中已经开启了 `pcie3x2` 控制器), 然后运行 `tests/.run_test.sh` 测试读写, 运行 `tests/.perform_hwcount.sh` 可以测试读写速度.  
 当前 `PCIe` 接口的实测最高读写速度如下 (向下取整):  
-  
+
     Host to Card (H2C): 810 MB/s
     Card to Host (C2H): 710 MB/s
-  
+
 读写速度与传输字节数对应关系如下图所示:  
 <img src="images/PCIeBandwidth.png" alt="板内PCIe实测数据" style="width:500px; height:auto;" />  
 该接口理论最大带宽为 `1 GB/s`.  
@@ -223,7 +286,7 @@
 ### 2.5 千兆以太网测速
 
 请按照以下方式对千兆以太网进行测试.  
-  
+
 **Step 1**: 用网线连接板子和主机, 注意网线至少选择 `CAT6` 及以上标准的;  
 **Step 2**: 通过 `ipconfig` 和 `ifconfig` 分别检查主机和板子的 `IP` 地址. 注意两个设备的网段必须相同, 如果不同请通过以下命令修改板子的 `IP` 地址配置:  
 
@@ -253,14 +316,14 @@
     Master to Slave: 970 Mbps
 
 <p align="center">
-  <img src="images/ethernet_h2c.png" alt="PCB" width="45%" />
-  <img src="images/ethernet_c2h.png" alt="PCB" width="45%" /> 
+  <img src="images/ethernet_h2c.png" alt="以太网 Slave to Master 测速" width="45%" />
+  <img src="images/ethernet_c2h.png" alt="以太网 Master to Slave 测速" width="45%" />
 </p>
 
-### 6. 连接 `WIFI`
+### 2.6 连接 `WIFI`
 
 板子搭载了一个 `RTL8723DU` 模块, 硬件上只连接了 `WIFI` 端口, 请按照以下步骤连接 `WIFI`:  
-  
+
 **Step 1**: 确认板子的 `WIFI` 天线是否连接, 如果没有连接天线, 需要使用 `2.4G`, `IPEX-1` 规格的天线连接到板子上的 `WIFI-ANT`;  
 **Step 2**: 在系统中使用如下命令扫描存在的 `WIFI`:  
 
@@ -291,4 +354,5 @@
 
 `FPGA` 的硬件设计流程和其他所有厂家的相同, 只需在 `VIVADO` 中进行即可.  
 
+---
 _Shixuan Liu 2025_
