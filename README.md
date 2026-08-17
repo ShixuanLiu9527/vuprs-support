@@ -40,12 +40,9 @@
 
 ## 系统架构
 
-```mermaid
-flowchart LR
-    A["麦克风阵列模块<br>(16 路模拟信号)"] -->|"PCIe x8 排线<br>模拟信号输入"| B["FPGA XC7A100T<br>数据采集 · 波束形成 · FIR 滤波"]
-    B -->|"PCIe 2.0 x2 XDMA<br>实测 810 / 710 MB/s"| C["RK3568 ARM64<br>信号处理 · RKNN NPU 推理<br>TCP 服务器 · FPGA-Tool"]
-    C -->|"以太网 TCP<br>实测 970 Mbps"| D["上位机 / 客户端"]
-```
+<div align="center">
+    <img src="images/structure.png" alt="structure" style="width:1000px; height:auto;" />
+</div>
 
 - **FPGA 侧** ([vuprs-fpga](https://github.com/ShixuanLiu9527/vuprs-fpga.git)): 负责多通道数据采集与硬件波束形成链路, 降低 ARM 侧实时计算压力;
 - **ARM 侧** ([vuprs-server](https://github.com/ShixuanLiu9527/vuprs-server.git)): 通过 `XDMA` 驱动与 FPGA 高速交互 (`AXI-Lite` 寄存器读写 / `AXI-Stream` 数据流传输), 完成波束形成, `FIR` 滤波 (基于 `FFTW3` 加速), 故障检测 (特征提取 + `RKNN` NPU 推理 + 后处理), 并通过以太网 `TCP` 服务器对外提供命令与数据服务, 同时提供 `FPGA-Tool` 终端调试工具.
